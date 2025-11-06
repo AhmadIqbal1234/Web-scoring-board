@@ -1,0 +1,5 @@
+jalankan server node js dengan buka terminal ketik npm start
+SISTEM KUIS - Ridwan and Team
+───────────────────────────────────────────────────────
+Tampilan: http://localhost:8080
+Admin: http://localhost:8080/admin.html

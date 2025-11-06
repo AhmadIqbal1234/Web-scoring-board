@@ -1,0 +1,17 @@
+{
+  "name": "quiz-scoring-js-esp32",
+  "version": "1.0.0",
+  "description": "Papan skor cerdas cermat dikontrol ESP32 (12 tim)",
+  "main": "server/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "author": "RNF",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}

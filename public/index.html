@@ -1,0 +1,40 @@
+﻿<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="./tts/android-chrome-192x192.png">
+  <title>Papan Skor - Cerdas Cermat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="content-wrapper">
+    <!-- Header Sports Style -->
+    <div class="header-container">
+      <div class="live-indicator"></div>
+      <div class="event-title">Cerdas Cermat</div>
+      <div class="event-subtitle">SMK N 1 Wonosegoro</div>
+    </div>
+
+    <!-- Timer -->
+    <div class="timer-container">
+      <div class="timer">00:00</div>
+    </div>
+
+    <main>
+      <div id="overlay" class="overlay"></div>
+      <div id="board" class="grid">
+        <!-- Tim akan di-generate oleh JavaScript -->
+      </div>
+      <div id="aiMessage" class="ai-message"></div>
+    </main>
+  </div>
+
+  <footer>
+    <h5>© 2025 Ridwan and Team</h5>
+  </footer>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/display.js"></script>
+</body>
+</html>
