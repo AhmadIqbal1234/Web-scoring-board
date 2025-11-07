@@ -1,4 +1,4 @@
-﻿<!doctype html>
+﻿﻿<!doctype html>
 <html lang="id" class="admin-page">
 <head>
   <meta charset="utf-8" />
@@ -65,6 +65,52 @@
       <div class="timer-status" id="timerStatus">
         <strong>Status Timer:</strong> <span id="timerState">TIDAK AKTIF</span>
         | <strong>Waktu Tersisa:</strong> <span id="currentTime">00:00</span>
+      </div>
+    </section>
+
+    <!-- 🆕 ESP32 Controller Status Panel -->
+    <section class="admin-panel">
+      <h2 class="panel-title">Status ESP32 Controller</h2>
+      
+      <div class="esp32-status" id="esp32Status">
+        <div class="controller-info">
+          <div class="controller-header">
+            <div class="controller-title">ESP32 Master Controller</div>
+            <div class="controller-badge searching" id="esp32Badge">MENCARI...</div>
+          </div>
+          
+          <div class="controller-details">
+            <div class="detail-item">
+              <span class="detail-label">Status Koneksi:</span>
+              <span class="detail-value" id="esp32Connection">Memeriksa...</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Aktivitas Terakhir:</span>
+              <span class="detail-value" id="esp32LastActivity">-</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Socket ID:</span>
+              <span class="detail-value" id="esp32SocketId">-</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Fitur:</span>
+              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="controller-actions">
+          <button id="refreshESP32" class="admin-btn btn-info">
+            REFRESH STATUS
+          </button>
+          
+          <button id="testESP32" class="admin-btn btn-test">
+            TEST KONEKSI
+          </button>
+        </div>
       </div>
     </section>
 

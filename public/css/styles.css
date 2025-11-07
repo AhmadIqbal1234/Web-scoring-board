@@ -244,11 +244,11 @@ main {
 /* Tim aktif di tengah layar */
 .team.active {
   position: fixed;
-  top: 50%;
+  top: 65%;
   left: 50%;
   transform: translate(-50%, -50%);
   width: 80vw;
-  height: 70vh;
+  height: 60vh;
   max-width: 1000px;
   max-height: 600px;
   z-index: 200;
@@ -283,7 +283,7 @@ main {
 /* AI Message (Hitungan Mundur) - DIKECILKAN dan diposisikan ulang */
 .ai-message {
   position: fixed;
-  top: 25%; /* Dipindah lebih bawah untuk timer */
+  top: 30%; /* Dipindah lebih bawah untuk timer */
   left: 50%;
   transform: translateX(-50%) scale(0.8);
   background: linear-gradient(135deg, #ff6b00, #ff8c00);

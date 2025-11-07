@@ -234,6 +234,112 @@
   color: white;
 }
 
+/* ===== ESP32 CONTROLLER STATUS STYLES ===== */
+.esp32-status {
+  background: linear-gradient(145deg, var(--admin-bg-card), var(--admin-bg-hover));
+  border: 2px solid var(--admin-border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.controller-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--admin-border);
+}
+
+.controller-title {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--admin-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.controller-badge {
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.controller-badge.connected {
+  background: var(--admin-success);
+  color: white;
+  animation: pulse 2s infinite;
+}
+
+.controller-badge.disconnected {
+  background: var(--admin-danger);
+  color: white;
+}
+
+.controller-badge.searching {
+  background: var(--admin-warning);
+  color: #000;
+}
+
+.controller-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.detail-label {
+  font-size: 0.9rem;
+  color: var(--admin-text-dim);
+  font-weight: 600;
+}
+
+.detail-value {
+  font-size: 1rem;
+  color: var(--admin-text-primary);
+  font-weight: 700;
+}
+
+.controller-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.controller-actions .admin-btn {
+  padding: 0.8rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  flex: 1;
+  max-width: 200px;
+}
+
+.btn-info {
+  background: linear-gradient(145deg, var(--admin-accent), #0099cc);
+  color: white;
+}
+
+.btn-test {
+  background: linear-gradient(145deg, var(--admin-primary), #ffa500);
+  color: #000;
+}
+
 .jury-section {
   text-align: center;
 }
@@ -657,6 +763,18 @@ footer h5 {
   
   .team-card-compact .team-score {
     font-size: 1.8rem;
+  }
+
+  .controller-details {
+    grid-template-columns: 1fr;
+  }
+  
+  .controller-actions {
+    flex-direction: column;
+  }
+  
+  .controller-actions .admin-btn {
+    max-width: 100%;
   }
 }
 
