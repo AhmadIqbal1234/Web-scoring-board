@@ -658,125 +658,12 @@ socket.on("timerReset", () => {
     resetTimerDisplay();
 });
 
-// // 🧩 Panel Testing Manual
-// function createTestPanel() {
-//     const panel = document.createElement("div");
-//     panel.id = "testPanel";
-//     let html = `<h3>🧪 PANEL TESTING</h3>`;
-
-//     // Tombol 12 tim
-//     for (let i = 1; i <= TEAM_COUNT; i++) {
-//         html += `<button class="test-btn" data-team="${i}">Tim ${getTeamLetter(i)}</button>`;
-//     }
-
-//     // Tombol juri dan audio test
-//     html += `
-//         <button class="test-btn" id="juryPlus">✅ Benar (+5)</button>
-//         <button class="test-btn" id="juryMinus">❌ Salah (-2)</button>
-//         <button class="test-btn" id="juryReset">🔄 Buka Kunci</button>
-//         <button class="test-btn" id="testAudio">🔊 Test Audio</button>
-//         <button class="test-btn" id="testJuryAudio">🔊 Test Audio Juri</button>
-//     `;
-
-//     panel.innerHTML = html;
-//     document.body.appendChild(panel);
-
-//     // Event listeners untuk tombol tim
-//     panel.querySelectorAll("button[data-team]").forEach(btn => {
-//         btn.addEventListener("click", () => {
-//             const team = btn.getAttribute("data-team");
-//             clientLogger.info('Testing buzzer pressed', { team, teamLetter: getTeamLetter(team) });
-            
-//             fetch(`/update?team=${team}&add=0&first=1`)
-//                 .then(response => {
-//                     if (response.ok) {
-//                         clientLogger.info('Buzzer test successful', { team });
-//                     } else {
-//                         clientLogger.error('Buzzer test failed', { team, status: response.statusText });
-//                     }
-//                 })
-//                 .catch(err => clientLogger.error('Buzzer test error:', err));
-//         });
-//     });
-
-//     // Event listeners untuk tombol juri
-//     document.getElementById("juryPlus").addEventListener("click", () => {
-//         if (activeTeam) {
-//             clientLogger.info('Jury plus pressed', { activeTeam });
-//             fetch(`/update?team=${activeTeam}&add=5`)
-//                 .catch(err => clientLogger.error('Jury plus error:', err));
-//         } else {
-//             alert('Tidak ada tim aktif! Tekan tombol tim terlebih dahulu.');
-//         }
-//     });
-
-//     document.getElementById("juryMinus").addEventListener("click", () => {
-//         if (activeTeam) {
-//             clientLogger.info('Jury minus pressed', { activeTeam });
-//             fetch(`/update?team=${activeTeam}&add=-2`)
-//                 .catch(err => clientLogger.error('Jury minus error:', err));
-//         } else {
-//             alert('Tidak ada tim aktif! Tekan tombol tim terlebih dahulu.');
-//         }
-//     });
-
-//     document.getElementById("juryReset").addEventListener("click", () => {
-//         clientLogger.info('Manual unlock requested');
-//         fetch(`/unlock`)
-//             .then(r => r.json())
-//             .then(data => {
-//                 clientLogger.info('Manual unlock successful', data);
-//                 alert('Sistem berhasil dibuka kunci!');
-//             })
-//             .catch(err => clientLogger.error('Manual unlock error:', err));
-//     });
-
-//     // Test audio button
-//     document.getElementById("testAudio").addEventListener("click", () => {
-//         const testTeam = 1; // Test dengan tim A
-//         clientLogger.info('Audio test requested', { team: testTeam });
-        
-//         fetch(`/triggerAudio?team=${testTeam}`)
-//             .then(r => r.json())
-//             .then(data => {
-//                 clientLogger.info('Audio test successful', data);
-//                 alert(`Audio test untuk Tim A berhasil!`);
-//             })
-//             .catch(err => {
-//                 clientLogger.error('Audio test failed:', err);
-//                 alert('Audio test gagal!');
-//             });
-//     });
-
-//     // Test audio juri button - BARU
-//     document.getElementById("testJuryAudio").addEventListener("click", () => {
-//         clientLogger.info('Jury audio test requested');
-        
-//         // Simulasikan event audio juri
-//         socket.emit("playJuryAudio", {
-//             isCorrect: true,
-//             audioFile: 'benar.mp3'
-//         });
-        
-//         setTimeout(() => {
-//             socket.emit("playJuryAudio", {
-//                 isCorrect: false,
-//                 audioFile: 'salah.mp3'
-//             });
-//         }, 2000);
-        
-//         alert('Testing audio juri: BENAR dan SALAH (2 detik interval)');
-//     });
-// }
-
-// // Render panel testing
-// createTestPanel();
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
-    clientLogger.info('🎯 Display initialized - IMPROVED Audio System + Timer Sync + Jury Audio');
-    clientLogger.info('✅ Fixed: Audio-Timer synchronization with 5s safety timeout');
-    clientLogger.info('✅ Fixed: Better error handling and fallback mechanisms');
-    clientLogger.info('✅ Added: Jury audio feedback system (benar/salah)');
+    clientLogger.info('Display initialized - IMPROVED Audio System + Timer Sync + Jury Audio');
+    clientLogger.info('Fixed: Audio-Timer synchronization with 5s safety timeout');
+    clientLogger.info('Fixed: Better error handling and fallback mechanisms');
+    clientLogger.info('Added: Jury audio feedback system (benar/salah)');
 });

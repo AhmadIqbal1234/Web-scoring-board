@@ -4,7 +4,7 @@ const TEAM_COUNT = 12;
 let config = { plus: 5, minus: -2, timerDuration: 30 };
 let lockState = { locked: false, activeTeam: null };
 
-// 🆕 ESP32 Status Tracking
+// ESP32 Status Tracking
 let esp32Status = {
   connected: false,
   lastActivity: null,
@@ -116,7 +116,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// 🆕 Function untuk update ESP32 display - DIPERBAIKI
+// Function untuk update ESP32 display - DIPERBAIKI
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -156,7 +156,7 @@ function updateESP32Status(status) {
   adminLogger.esp32('Status Updated', esp32Status);
 }
 
-// 🆕 Function untuk ESP32 controls
+// Function untuk ESP32 controls
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -431,7 +431,7 @@ function updateTimerStatus(state, seconds) {
     adminLogger.info('Timer status updated', { state, seconds });
 }
 
-// 🆕 Socket events untuk ESP32 - DIPERBAIKI
+//Socket events untuk ESP32 - DIPERBAIKI
 socket.on("esp32Status", (status) => {
     adminLogger.event('esp32Status', status);
     updateESP32Status(status);
@@ -548,9 +548,9 @@ socket.on("reset", (scores) => {
 function initializeAdmin() {
     createTeamControls();
     initializeJuryControls();
-    initializeESP32Controls(); // 🆕 Initialize ESP32 controls
+    initializeESP32Controls(); // Initialize ESP32 controls
     updateTimerStatus('TIDAK AKTIF', 0);
-    refreshESP32Status(); // 🆕 Load initial ESP32 status
+    refreshESP32Status(); // Load initial ESP32 status
     
     // Load initial data dengan error handling
     Promise.all([
@@ -562,7 +562,7 @@ function initializeAdmin() {
             if (!r.ok) throw new Error('Failed to fetch scores');
             return r.json();
         }),
-        fetch('/esp32status').then(r => { // 🆕 Load ESP32 status
+        fetch('/esp32status').then(r => { //Load ESP32 status
             if (!r.ok) throw new Error('Failed to fetch ESP32 status');
             return r.json();
         })
