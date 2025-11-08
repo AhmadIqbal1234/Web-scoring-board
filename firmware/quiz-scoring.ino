@@ -10,6 +10,7 @@
   - REVISED: Improved I2C error handling and stability with audio trigger
   - ADDED: Server logging and ESP32 status monitoring
   - ADDED: ESP32 Heartbeat System for server tracking
+  - Copyright © 2025 Ridwan and Team
 */
 
 #include <WiFi.h>

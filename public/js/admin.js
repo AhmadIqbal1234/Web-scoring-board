@@ -1,4 +1,5 @@
-﻿﻿const socket = io();
+﻿﻿/*Copyright © 2025 Ridwan and Team*/
+const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
 let config = { plus: 5, minus: -2, timerDuration: 30 };

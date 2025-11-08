@@ -1,43 +1,44 @@
-﻿﻿const socket = io();
+﻿﻿/*Copyright © 2025 Ridwan and Team*/
+const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
 let activeTeam = null;
 
-// 🟢 Client Logger
+// Client Logger
 const clientLogger = {
   info: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`🟢 [CLIENT:${timestamp}] ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   },
   
   warn: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`🟡 [CLIENT:${timestamp}] ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   },
   
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`🔴 [CLIENT:${timestamp}] ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   },
   
   event: (eventName, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`🔵 [CLIENT:${timestamp}] EVENT: ${eventName}`, data || '');
+    console.log(`[CLIENT:${timestamp}] EVENT: ${eventName}`, data || '');
   },
   
   audio: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`🔊 [CLIENT:${timestamp}] AUDIO: ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] AUDIO: ${message}`, data || '');
   }
 };
 
-// 🎵 Audio elements untuk SOUND EFFECTS
+// Audio elements untuk SOUND EFFECTS
 const buzzSound = document.getElementById("buzzSound");
 const correctSound = document.getElementById("correctSound");
 const wrongSound = document.getElementById("wrongSound");
 
-// 🎵 SISTEM AUDIO FILE DENGAN CALLBACK - IMPROVED
+// SISTEM AUDIO FILE DENGAN CALLBACK - IMPROVED
 class SistemAudioTim {
   constructor() {
     this.audioElements = new Map();
@@ -61,18 +62,18 @@ class SistemAudioTim {
       this.audioElements.set(i, audioEl);
     }
     
-    clientLogger.audio('✅ Sistem audio tim diinisialisasi');
+    clientLogger.audio('Sistem audio tim diinisialisasi');
   }
 
   putarAudio(team, onAudioEnd = null) {
     if (this.sedangMemutar) {
-      clientLogger.audio('⚠️ Audio sedang diputar, menghentikan yang lama');
+      clientLogger.audio('Audio sedang diputar, menghentikan yang lama');
       this.berhenti();
     }
 
     const audioEl = this.audioElements.get(team);
     if (!audioEl) {
-      clientLogger.error('❌ Audio tidak ditemukan untuk tim:', team);
+      clientLogger.error('Audio tidak ditemukan untuk tim:', team);
       // Jika audio tidak ada, langsung trigger callback
       if (onAudioEnd) {
         setTimeout(() => this.executeCallback(onAudioEnd), 100);
@@ -87,7 +88,7 @@ class SistemAudioTim {
 
       // Set handler untuk ketika audio selesai
       audioEl.onended = () => {
-        clientLogger.audio('🔊 Audio selesai diputar - executing callback');
+        clientLogger.audio('Audio selesai diputar - executing callback');
         this.sedangMemutar = false;
         if (this.onAudioEndCallback) {
           this.executeCallback(this.onAudioEndCallback);
@@ -97,7 +98,7 @@ class SistemAudioTim {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`🔊 Memutar audio untuk Tim ${getTeamLetter(team)}`);
+        clientLogger.audio(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
         
         // Tampilkan pesan AI
         const aiMessageEl = document.getElementById("aiMessage");
@@ -111,7 +112,7 @@ class SistemAudioTim {
         }
         
       }).catch(error => {
-        clientLogger.error('❌ Gagal memutar audio:', error);
+        clientLogger.error('Gagal memutar audio:', error);
         this.sedangMemutar = false;
         // Jika gagal play, langsung trigger callback setelah delay
         if (this.onAudioEndCallback) {
@@ -125,7 +126,7 @@ class SistemAudioTim {
       return true;
       
     } catch (error) {
-      clientLogger.error('❌ Exception audio:', error);
+      clientLogger.error('Exception audio:', error);
       this.sedangMemutar = false;
       if (this.onAudioEndCallback) {
         setTimeout(() => {
@@ -138,12 +139,12 @@ class SistemAudioTim {
   }
 
   handleAudioError(event, teamLetter) {
-    clientLogger.error(`❌ Error audio untuk Tim ${teamLetter}:`, event);
+    clientLogger.error(`Error audio untuk Tim ${teamLetter}:`, event);
     this.sedangMemutar = false;
     
     // Jika ada callback, eksekusi meski audio error
     if (this.onAudioEndCallback) {
-      clientLogger.audio('🎯 Executing callback despite audio error');
+      clientLogger.audio('Executing callback despite audio error');
       setTimeout(() => {
         this.executeCallback(this.onAudioEndCallback);
         this.onAudioEndCallback = null;
@@ -156,7 +157,7 @@ class SistemAudioTim {
       switch (callbackData.action) {
         case 'startTimer':
           if (callbackData.team) {
-            clientLogger.audio(`⏰ Memulai timer untuk Tim ${getTeamLetter(callbackData.team)} setelah audio selesai`);
+            clientLogger.audio(`Memulai timer untuk Tim ${getTeamLetter(callbackData.team)} setelah audio selesai`);
             // Beri tahu server bahwa audio selesai dan timer bisa mulai
             this.notifyServerAudioFinished(callbackData.team);
           }
@@ -206,7 +207,7 @@ class SistemAudioTim {
   }
 }
 
-// 🎵 Sistem Audio untuk Timer Countdown - IMPROVED
+// Sistem Audio untuk Timer Countdown - IMPROVED
 class TimerAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -229,7 +230,7 @@ class TimerAudioSystem {
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.audio('✅ Sistem audio timer countdown diinisialisasi');
+    clientLogger.audio('Sistem audio timer countdown diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -239,7 +240,7 @@ class TimerAudioSystem {
 
     const audioEl = this.audioElements.get(audioFile);
     if (!audioEl) {
-      clientLogger.error('❌ Audio timer tidak ditemukan:', audioFile);
+      clientLogger.error('Audio timer tidak ditemukan:', audioFile);
       return false;
     }
 
@@ -249,15 +250,15 @@ class TimerAudioSystem {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`🔊 Memutar audio timer: ${audioFile}`);
+        clientLogger.audio(`Memutar audio timer: ${audioFile}`);
       }).catch(error => {
-        clientLogger.error('❌ Gagal memutar audio timer:', error);
+        clientLogger.error('Gagal memutar audio timer:', error);
         this.sedangMemutar = false;
       });
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.audio('🔊 Audio timer selesai');
+        clientLogger.audio('Audio timer selesai');
         
         // Beri tahu server bahwa audio timer selesai
         if (audioFile === 'waktu habis.mp3') {
@@ -269,7 +270,7 @@ class TimerAudioSystem {
       return true;
       
     } catch (error) {
-      clientLogger.error('❌ Exception audio timer:', error);
+      clientLogger.error('Exception audio timer:', error);
       this.sedangMemutar = false;
       return false;
     }
@@ -284,7 +285,7 @@ class TimerAudioSystem {
   }
 }
 
-// 🎵 Sistem Audio untuk Juri - BARU
+// Sistem Audio untuk Juri - BARU
 class JuryAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -305,7 +306,7 @@ class JuryAudioSystem {
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.audio('✅ Sistem audio juri diinisialisasi');
+    clientLogger.audio('Sistem audio juri diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -315,7 +316,7 @@ class JuryAudioSystem {
 
     const audioEl = this.audioElements.get(audioFile);
     if (!audioEl) {
-      clientLogger.error('❌ Audio juri tidak ditemukan:', audioFile);
+      clientLogger.error('Audio juri tidak ditemukan:', audioFile);
       return false;
     }
 
@@ -325,21 +326,21 @@ class JuryAudioSystem {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`🔊 Memutar audio juri: ${audioFile}`);
+        clientLogger.audio(`Memutar audio juri: ${audioFile}`);
       }).catch(error => {
-        clientLogger.error('❌ Gagal memutar audio juri:', error);
+        clientLogger.error('Gagal memutar audio juri:', error);
         this.sedangMemutar = false;
       });
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.audio('🔊 Audio juri selesai');
+        clientLogger.audio('Audio juri selesai');
       };
 
       return true;
       
     } catch (error) {
-      clientLogger.error('❌ Exception audio juri:', error);
+      clientLogger.error('Exception audio juri:', error);
       this.sedangMemutar = false;
       return false;
     }
@@ -357,9 +358,9 @@ class JuryAudioSystem {
 // Inisialisasi sistem audio
 const audioTim = new SistemAudioTim();
 const timerAudio = new TimerAudioSystem();
-const juryAudio = new JuryAudioSystem(); // 🆕 Sistem audio juri
+const juryAudio = new JuryAudioSystem(); // Sistem audio juri
 
-// 🧩 TIMER FUNCTIONS
+// TIMER FUNCTIONS
 function updateTimerDisplay(seconds) {
     const timerEl = document.querySelector('.timer');
     if (!timerEl) return;
@@ -387,7 +388,7 @@ function resetTimerDisplay() {
     }
 }
 
-// 🧩 Fungsi tampilkan tim aktif
+// fungsi tampilkan tim aktif
 function showActiveTeam(team) {
     clientLogger.info(`Showing active team`, { team, teamLetter: getTeamLetter(team) });
     
@@ -411,7 +412,7 @@ function showActiveTeam(team) {
     clientLogger.info(`Team display updated`, { activeTeam, activeTeamLetter: getTeamLetter(team) });
 }
 
-// 🧩 Fungsi reset tampilan
+// Fungsi reset tampilan
 function resetDisplay() {
     clientLogger.info(`Resetting display - unlocking all teams`);
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -422,12 +423,12 @@ function resetDisplay() {
     activeTeam = null;
 }
 
-// 🧩 Helper tim
+// Helper tim
 function getTeamLetter(index) {
     return String.fromCharCode(65 + index - 1);
 }
 
-// 🧩 Render tim di papan
+// Render tim di papan
 function renderInitial() {
     board.innerHTML = "";
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -445,9 +446,9 @@ function renderInitial() {
 
 renderInitial();
 
-// 🧩 Socket event handlers - DIPERBAIKI
+// Socket event handlers - DIPERBAIKI
 socket.on("connect", () => {
-    clientLogger.info('✅ Connected to server');
+    clientLogger.info('Connected to server');
     
     const liveIndicator = document.querySelector('.live-indicator');
     if (liveIndicator) {
@@ -478,7 +479,7 @@ socket.on("connect", () => {
 });
 
 socket.on("disconnect", () => {
-    clientLogger.warn('❌ Disconnected from server');
+    clientLogger.warn('Disconnected from server');
     const liveIndicator = document.querySelector('.live-indicator');
     if (liveIndicator) {
         liveIndicator.style.background = '#ff4444';
@@ -486,7 +487,7 @@ socket.on("disconnect", () => {
     }
 });
 
-// 🧩 Update skor realtime
+// Update skor realtime
 socket.on("update", payload => {
     clientLogger.event('update', payload);
     const { team, score } = payload;
@@ -498,7 +499,7 @@ socket.on("update", payload => {
     }
 });
 
-// 🧩 Reset semua skor
+// Reset semua skor
 socket.on("reset", arr => {
     clientLogger.event('reset', { scores: arr });
     if (Array.isArray(arr)) {
@@ -514,7 +515,7 @@ socket.on("reset", arr => {
     }
 });
 
-// 🧩 Status kunci tim
+// Status kunci tim
 socket.on("lockstate", state => {
     clientLogger.event('lockstate', state);
     if (!state.locked) {
@@ -524,7 +525,7 @@ socket.on("lockstate", state => {
     }
 });
 
-// 🧩 Suara tombol buzzer
+// Suara tombol buzzer
 socket.on("buzz", ({ team }) => {
     clientLogger.event('buzz', { team, teamLetter: getTeamLetter(team) });
     
@@ -537,7 +538,7 @@ socket.on("buzz", ({ team }) => {
     }
 });
 
-// 🔥 HANDLER AUDIO YANG DIPERBAIKI
+// HANDLER AUDIO YANG DIPERBAIKI
 socket.on("playTeamAudio", (data) => {
     clientLogger.event('playTeamAudio', data);
     const { team, audioFile, timerDuration } = data;
@@ -568,7 +569,7 @@ socket.on("playTimerAudio", (data) => {
     timerAudio.putarAudio(audioFile);
 });
 
-// 🔥 HANDLER AUDIO JURI - BARU
+// HANDLER AUDIO JURI - BARU
 socket.on("playJuryAudio", (data) => {
     clientLogger.event('playJuryAudio', data);
     const { isCorrect, audioFile } = data;
@@ -581,7 +582,7 @@ socket.on("playJuryAudio", (data) => {
     // Tampilkan pesan AI untuk juri
     const aiMessageEl = document.getElementById("aiMessage");
     if (aiMessageEl) {
-        const message = isCorrect ? '✅ JAWABAN BENAR!' : '❌ JAWABAN SALAH!';
+        const message = isCorrect ? 'JAWABAN BENAR!' : 'JAWABAN SALAH!';
         aiMessageEl.textContent = message;
         aiMessageEl.classList.add("show");
         
@@ -591,7 +592,7 @@ socket.on("playJuryAudio", (data) => {
     }
 });
 
-// 🧩 Pesan AI tanpa TTS
+// Pesan AI tanpa TTS
 let aiMessageTimeout;
 
 socket.on("aiMessage", (data) => {
@@ -620,7 +621,7 @@ socket.on("aiMessage", (data) => {
     }, 4000);
 });
 
-// 🧩 Suara juri
+// Suara juri
 socket.on("scoring", ({ team, isCorrect }) => {
     clientLogger.event('scoring', { team, isCorrect });
     
@@ -632,7 +633,7 @@ socket.on("scoring", ({ team, isCorrect }) => {
     }
 });
 
-// 🧩 TIMER EVENTS FROM SERVER
+// TIMER EVENTS FROM SERVER
 socket.on("timerStart", (data) => {
     clientLogger.event('timerStart', data);
     if (data.duration) {
