@@ -659,6 +659,7 @@ socket.on("timerReset", () => {
     resetTimerDisplay();
 });
 
+
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
