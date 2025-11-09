@@ -14,7 +14,12 @@ const __dirname = dirname(__filename);
 const app = express();
 const http = createServer(app);
 
-// ===== SECURITY MIDDLEWARE =====
+// ===== ENVIRONMENT CONFIG =====
+const PORT = process.env.PORT || 8080;
+const TEAM_COUNT = 12;
+const isProduction = process.env.NODE_ENV === 'production';
+
+// ===== SMART SECURITY MIDDLEWARE =====
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -28,28 +33,80 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// Rate limiting
+// ===== SMART RATE LIMITING - FIXED IP DETECTION =====
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 menit
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
-});
-app.use(limiter);
-
-// CORS setup untuk production
-const io = new Server(http, {
-  cors: {
-    origin: process.env.NODE_ENV === 'production' 
-      ? [process.env.FRONTEND_URL, "https://*.railway.app"] 
-      : "*",
-    methods: ["GET", "POST"]
+  max: (req) => {
+    // Dapatkan IP client dengan method yang benar
+    let clientIP = req.ip || 
+                  req.connection.remoteAddress || 
+                  req.socket.remoteAddress ||
+                  (req.connection.socket ? req.connection.socket.remoteAddress : null);
+    
+    // Debug logging untuk development
+    if (!isProduction) {
+      console.log(`[RATE LIMIT] Client IP: ${clientIP}, URL: ${req.url}`);
+    }
+    
+    // Whitelist untuk ESP32 dan development
+    const whitelistIPs = [
+      '192.168.1.',    // ESP32 IP range
+      '127.0.0.1',     // Localhost IPv4
+      '::1',           // Localhost IPv6
+      '::ffff:127.0.0.1', // Localhost alternative
+      '::ffff:192.168.1.', // ESP32 IPv6 format
+      '172.',          // Docker internal
+      '10.'            // Private network
+    ];
+    
+    const whitelistURLs = [
+      '/health',
+      '/esp32checkin', 
+      '/esp32status',
+      '/config',
+      '/lockstate',
+      '/update'
+    ];
+    
+    // Cek apakah IP di whitelist
+    const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
+    
+    // Cek apakah URL di whitelist
+    const isWhitelistedURL = whitelistURLs.some(url => req.url.startsWith(url));
+    
+    if (isWhitelistedIP || isWhitelistedURL) {
+      if (!isProduction) {
+        console.log(`[RATE LIMIT] Whitelisted - IP: ${clientIP}, URL: ${req.url}`);
+      }
+      return 10000; // Practically unlimited untuk whitelist
+    }
+    
+    // Untuk external IPs
+    return isProduction ? 100 : 1000;
+  },
+  message: {
+    error: 'Terlalu banyak request',
+    message: 'Silakan coba lagi setelah 15 menit'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req, res) => {
+    // Skip successful requests dari logging
+    return res.statusCode < 400;
   }
 });
 
-// Environment variables
-const PORT = process.env.PORT || 8080;
-const TEAM_COUNT = 12;
-const isProduction = process.env.NODE_ENV === 'production';
+app.use(limiter);
+
+// CORS setup untuk semua environment
+const io = new Server(http, {
+  cors: {
+    origin: isProduction 
+      ? [process.env.FRONTEND_URL, "https://*.railway.app", "https://*.up.railway.app"] 
+      : ["http://localhost:8080", "http://192.168.1.5:8080", "http://192.168.1.100:8080"],
+    methods: ["GET", "POST"]
+  }
+});
 
 let scores = Array(TEAM_COUNT).fill(0);
 let config = { plus: 5, minus: -2, timerDuration: 30 };
@@ -61,7 +118,7 @@ let isTimerRunning = false;
 let audioPlaying = false;
 let audioFinishTimeout = null;
 
-// ESP32 Status Tracking - DIPERBAIKI
+// ESP32 Status Tracking
 let esp32Connected = false;
 let lastEsp32Activity = null;
 let esp32SocketId = null;
@@ -104,7 +161,6 @@ class TimerAudioSystem {
       0: 'waktu habis.mp3'
     };
     
-    // Tambahkan audio untuk juri
     this.juryAudio = {
       correct: 'benar.mp3',
       wrong: 'salah.mp3'
@@ -122,7 +178,6 @@ class TimerAudioSystem {
     }
   }
 
-  // Method baru untuk memutar audio juri
   playJuryAudio(isCorrect) {
     const audioFile = isCorrect ? this.juryAudio.correct : this.juryAudio.wrong;
     if (audioFile) {
@@ -175,10 +230,6 @@ function generateFeedbackMessage(team, isCorrect, points) {
 
 // Validasi file audio - DIPERBAIKI PATH untuk production
 function validateAudioFiles() {
-  // Gunakan process.cwd() untuk compatibility dengan Railway
-  const audioDir = join(process.cwd(), "public", "audio");
-  
-  // Fallback ke __dirname jika process.cwd() tidak bekerja
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
     join(__dirname, "public", "audio"),
@@ -197,7 +248,6 @@ function validateAudioFiles() {
   
   if (!audioDirFound) {
     logger.error('No audio directory found! Creating public/audio...');
-    // Create directory jika tidak ada
     const defaultDir = join(process.cwd(), "public", "audio");
     fs.mkdirSync(defaultDir, { recursive: true });
     audioDirFound = defaultDir;
@@ -232,12 +282,10 @@ function validateAudioFiles() {
   if (missingFiles.length > 0) {
     logger.error(`Missing files: ${missingFiles.join(', ')}`);
     
-    // Create placeholder files untuk missing files (development only)
     if (!isProduction) {
       logger.info('Creating placeholder audio files for development...');
       missingFiles.forEach(file => {
         const placeholderPath = join(audioDirFound, file);
-        // Create empty file sebagai placeholder
         fs.writeFileSync(placeholderPath, '');
         logger.info(`Created placeholder: ${file}`);
       });
@@ -326,7 +374,6 @@ function startTimerAfterAudio(team) {
     }
   }, 5000);
   
-  // Tunggu 500ms untuk memastikan audio benar-benar mulai di client
   setTimeout(() => {
     if (!isTimerRunning) {
       logger.info("Audio playback should have started, waiting for client confirmation...", { team });
@@ -334,7 +381,7 @@ function startTimerAfterAudio(team) {
   }, 500);
 }
 
-// Function untuk update ESP32 status dan broadcast - DIPERBAIKI
+// Function untuk update ESP32 status dan broadcast
 function updateESP32Status(connected, socket = null, ip = null) {
   esp32Connected = connected;
   
@@ -354,7 +401,6 @@ function updateESP32Status(connected, socket = null, ip = null) {
     });
   }
   
-  // Broadcast status ke semua client admin
   io.emit("esp32Status", {
     connected: esp32Connected,
     lastActivity: lastEsp32Activity,
@@ -363,7 +409,7 @@ function updateESP32Status(connected, socket = null, ip = null) {
   });
 }
 
-// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based) - SOLUSI BARU
+// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based)
 app.get("/esp32checkin", (req, res) => {
   const action = req.query.action || 'heartbeat';
   const team = req.query.team;
@@ -380,7 +426,6 @@ app.get("/esp32checkin", (req, res) => {
     timestamp: lastEsp32Activity.toISOString()
   });
   
-  // Broadcast ke semua admin
   io.emit("esp32Status", {
     connected: true,
     lastActivity: lastEsp32Activity,
@@ -398,7 +443,6 @@ app.get("/esp32checkin", (req, res) => {
 });
 
 // ===== STATIC FILE SERVING dengan path yang robust =====
-// Cari public directory yang benar
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
   join(__dirname, "public"),
@@ -415,16 +459,13 @@ for (const dir of possiblePublicDirs) {
 }
 
 if (!publicDirFound) {
-  // Create public directory jika tidak ada
   publicDirFound = join(process.cwd(), "public");
   fs.mkdirSync(publicDirFound, { recursive: true });
   logger.info(`Created public directory: ${publicDirFound}`);
 }
 
-// Serve static files
 app.use(express.static(publicDirFound));
 
-// Audio route dengan path yang robust
 const audioDir = join(publicDirFound, "audio");
 if (fs.existsSync(audioDir)) {
   app.use('/audio', express.static(audioDir));
@@ -440,7 +481,6 @@ app.get('/tts/android-chrome-192x192.png', (req, res) => {
   if (fs.existsSync(faviconPath)) {
     res.sendFile(faviconPath);
   } else {
-    // Fallback ke public root
     const fallbackPath = join(publicDirFound, 'android-chrome-192x192.png');
     if (fs.existsSync(fallbackPath)) {
       res.sendFile(fallbackPath);
@@ -455,7 +495,8 @@ app.get("/", (req, res) => {
   res.json({ 
     status: "Quiz Scoring System API", 
     version: "2.0.0",
-    environment: process.env.NODE_ENV || "development",
+    environment: isProduction ? "production" : "development",
+    rateLimiting: "Smart limits enabled",
     ready: true
   });
 });
@@ -474,8 +515,7 @@ app.get("/update", async (req, res) => {
   logger.info('/update called', { team, add, isFirst, ip });
 
   // LOG ACTIVITY JIKA DARI ESP32
-  if (ip.includes('192.168.1.14') || ip.includes('192.168.1.')) { // Adjust IP range sesuai jaringan ESP32
-    // Log activity ESP32
+  if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
     lastEsp32Activity = new Date();
     logger.esp32("ESP32 Activity", {
       type: "buzzer",
@@ -504,7 +544,6 @@ app.get("/update", async (req, res) => {
     
     const audioFile = getTeamAudioFile(team);
     
-    // Kirim event untuk memutar audio tim
     io.emit("playTeamAudio", {
       team: team,
       audioFile: audioFile,
@@ -513,7 +552,6 @@ app.get("/update", async (req, res) => {
     
     logger.audio(`Memutar "${audioFile}" - Timer akan mulai setelah audio selesai`);
     
-    // Start safety mechanism untuk timer
     startTimerAfterAudio(team);
   }
 
@@ -522,10 +560,8 @@ app.get("/update", async (req, res) => {
     io.emit("update", { team, score: scores[team - 1] });
     io.emit("scoring", { team, isCorrect: add > 0 });
     
-    // TAMBAHKAN: Putar audio juri berdasarkan benar/salah
     timerAudio.playJuryAudio(add > 0);
     
-    // Feedback message tanpa TTS
     const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
     io.emit("aiMessage", {
       message: feedbackMessage,
@@ -542,7 +578,6 @@ app.get("/update", async (req, res) => {
   res.json({ success: true, message: "OK", team, add, isFirst });
 });
 
-// Route untuk client memberi tahu audio selesai - IMPROVED
 app.get("/audioFinished", (req, res) => {
   const action = req.query.action;
   const team = parseInt(req.query.team);
@@ -550,7 +585,6 @@ app.get("/audioFinished", (req, res) => {
   
   logger.info("Audio finished callback received", { action, team, audioType });
   
-  // Clear safety timeout karena audio sudah selesai
   if (audioFinishTimeout) {
     clearTimeout(audioFinishTimeout);
     audioFinishTimeout = null;
@@ -572,7 +606,6 @@ app.get("/audioFinished", (req, res) => {
   });
 });
 
-// Route untuk trigger audio manual (testing)
 app.get("/triggerAudio", (req, res) => {
   const team = parseInt(req.query.team);
   
@@ -591,7 +624,6 @@ app.get("/triggerAudio", (req, res) => {
   res.json({ success: true, team: team, audioFile: audioFile });
 });
 
-// Route untuk unlock manual
 app.get("/unlock", (req, res) => {
   resetTimer();
   lockState = { locked: false, activeTeam: null };
@@ -638,7 +670,6 @@ app.get("/config", (req, res) => {
   res.json(config);
 });
 
-//Route untuk status ESP32 - DIPERBAIKI
 app.get("/esp32status", (req, res) => {
   res.json({ 
     connected: esp32Connected,
@@ -675,7 +706,8 @@ app.get("/health", (req, res) => {
       status: esp32Connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE"
     },
     connections: io.engine.clientsCount,
-    environment: process.env.NODE_ENV || "development",
+    environment: isProduction ? "production" : "development",
+    rateLimiting: "Smart limits active",
     services: {
       audio: "Audio File System - File per Tim & Timer Countdown & Juri",
       timer: "START AFTER AUDIO - Timer mulai setelah audio selesai",
@@ -701,7 +733,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket connection dengan ESP32 tracking - DIPERBAIKI
+// Socket connection dengan ESP32 tracking
 io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
@@ -712,8 +744,7 @@ io.on("connection", (socket) => {
     ip: clientIP
   });
 
-  // DETEKSI OTOMATIS ESP32 BERDASARKAN IP ATAU IDENTIFIKASI
-  if (clientType === 'esp32' || clientIP.includes('192.168.1.14')) { // Adjust IP sesuai ESP32
+  if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
     updateESP32Status(true, socket, clientIP);
     logger.esp32("ESP32 Controller detected via Socket.IO", {
       socketId: socket.id,
@@ -721,7 +752,6 @@ io.on("connection", (socket) => {
     });
   }
 
-  // Send initial state
   socket.emit("scores", scores);
   socket.emit("config", config);
   socket.emit("lockstate", lockState);
@@ -731,8 +761,7 @@ io.on("connection", (socket) => {
   }
 
   socket.on("disconnect", (reason) => {
-    // Jika ESP32 disconnect
-    if (clientType === 'esp32' || clientIP.includes('192.168.1.14')) {
+    if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
       updateESP32Status(false);
     }
     
@@ -746,27 +775,18 @@ io.on("connection", (socket) => {
 
 // Startup server
 async function startServer() {
-  // Validasi file audio saat startup
   const audioDir = validateAudioFiles();
   
   http.listen(PORT, async () => {
     console.log('\nSISTEM KUIS - Ridwan and Team');
     console.log('───────────────────────────────────────────────────────');
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     console.log(`Port: ${PORT}`);
     console.log(`Public directory: ${publicDirFound}`);
     console.log(`Audio directory: ${audioDir}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log(` Health Check: http://localhost:${PORT}/health`);
-    console.log('───────────────────────────────────────────────────────\n');
-    
-    // Log security features
-    console.log('Security Features:');
-    console.log('Helmet.js - Security headers');
-    console.log('Rate Limiting - 100 requests/15min per IP');
-    console.log('CORS configured for production');
-    console.log('Environment-based configuration');
+    console.log(`Health Check: http://localhost:${PORT}/health`);
     console.log('───────────────────────────────────────────────────────\n');
   });
 }

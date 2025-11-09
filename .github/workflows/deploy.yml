@@ -6,21 +6,57 @@ on:
 
 jobs:
   deploy:
+    name: Deploy ke Railway
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
+      - name: Checkout kode
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
-      - name: Deploy to Railway
-        run: npx @railway/cli deploy
+      - name: Setup direktori public
+        run: |
+          mkdir -p public/audio public/css public/js public/tts
+          # Copy file ke public directory jika ada
+          [ -f "styles.css" ] && cp styles.css public/css/styles.css || echo "styles.css tidak ada, buat placeholder"
+          [ -f "admin.css" ] && cp admin.css public/css/admin.css || echo "admin.css tidak ada, buat placeholder"
+          [ -f "display.js" ] && cp display.js public/js/display.js || echo "display.js tidak ada, buat placeholder"
+          [ -f "admin.js" ] && cp admin.js public/js/admin.js || echo "admin.js tidak ada, buat placeholder"
+          [ -f "index.html" ] && cp index.html public/index.html || echo "index.html tidak ada, buat placeholder"
+          [ -f "admin.html" ] && cp admin.html public/admin.html || echo "admin.html tidak ada, buat placeholder"
+          
+          # Buat placeholder untuk file yang tidak ada
+          [ ! -f "public/css/styles.css" ] && echo "body { background: #0a0a2a; color: white; }" > public/css/styles.css
+          [ ! -f "public/css/admin.css" ] && echo ".admin-page { background: #1a1a4a; color: white; }" > public/css/admin.css
+          [ ! -f "public/js/display.js" ] && echo "console.log('Display system ready');" > public/js/display.js
+          [ ! -f "public/js/admin.js" ] && echo "console.log('Admin system ready');" > public/js/admin.js
+          [ ! -f "public/index.html" ] && echo "<html><body><h1>Quiz Scoring System</h1></body></html>" > public/index.html
+          [ ! -f "public/admin.html" ] && echo "<html><body><h1>Admin Panel</h1></body></html>" > public/admin.html
+
+      - name: Buat file audio placeholder
+        run: |
+          # Buat file audio placeholder jika tidak ada
+          AUDIO_FILES=("Tim A.mp3" "Tim B.mp3" "Tim C.mp3" "Tim D.mp3" "Tim E.mp3" "Tim F.mp3" "Tim G.mp3" "Tim H.mp3" "Tim I.mp3" "Tim J.mp3" "Tim K.mp3" "Tim L.mp3" "30 detik.mp3" "20 detik.mp3" "10 detik.mp3" "5 detik.mp3" "4 detik.mp3" "3 detik.mp3" "2 detik.mp3" "1 detik.mp3" "waktu habis.mp3" "benar.mp3" "salah.mp3")
+          for file in "${AUDIO_FILES[@]}"; do
+            if [ ! -f "public/audio/$file" ]; then
+              echo "Membuat placeholder: public/audio/$file"
+              # Buat file MP3 placeholder minimal
+              printf '\xff\xfb\x90\x64\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' > "public/audio/$file"
+            fi
+          done
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy ke Railway
+        run: railway deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
