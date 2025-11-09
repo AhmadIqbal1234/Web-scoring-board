@@ -568,7 +568,7 @@ function initializeAdmin() {
             return r.json();
         })
     ]).then(([lockStateData, scoresData, esp32Data]) => {
-        lockState = lock32Data;
+        lockState = lockStateData;
         adminLogger.info('Initial data loaded', { 
             lockState: lockStateData, 
             scores: scoresData,
