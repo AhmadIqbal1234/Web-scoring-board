@@ -112,6 +112,9 @@ let scores = Array(TEAM_COUNT).fill(0);
 let config = { plus: 5, minus: -2, timerDuration: 30 };
 let lockState = { locked: false, activeTeam: null };
 
+// Team Toggle State
+let teamToggleState = Array(TEAM_COUNT).fill(true);
+
 let timerInterval = null;
 let timeRemaining = 0;
 let isTimerRunning = false;
@@ -501,6 +504,68 @@ app.get("/", (req, res) => {
   });
 });
 
+// ===== ROUTES UNTUK TEAM TOGGLE =====
+app.get("/toggleTeam", (req, res) => {
+  const team = parseInt(req.query.team);
+  const enabled = req.query.enabled === 'true';
+  
+  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+    return res.status(400).json({ error: "Tim tidak valid" });
+  }
+  
+  teamToggleState[team - 1] = enabled;
+  
+  logger.info("Team toggle updated", { 
+    team: team, 
+    teamLetter: getTeamLetter(team),
+    enabled: enabled 
+  });
+  
+  io.emit("teamToggleUpdate", {
+    team: team,
+    enabled: enabled
+  });
+  
+  res.json({ 
+    success: true, 
+    team: team, 
+    enabled: enabled,
+    message: `Tim ${getTeamLetter(team)} ${enabled ? 'diaktifkan' : 'dinonaktifkan'}`
+  });
+});
+
+app.get("/enableAllTeams", (req, res) => {
+  teamToggleState = Array(TEAM_COUNT).fill(true);
+  
+  logger.info("All teams enabled");
+  
+  io.emit("allTeamsEnabled");
+  
+  res.json({ 
+    success: true, 
+    message: "Semua tim diaktifkan",
+    teamToggleState: teamToggleState
+  });
+});
+
+app.get("/disableAllTeams", (req, res) => {
+  teamToggleState = Array(TEAM_COUNT).fill(false);
+  
+  logger.info("All teams disabled");
+  
+  io.emit("allTeamsDisabled");
+  
+  res.json({ 
+    success: true, 
+    message: "Semua tim dinonaktifkan",
+    teamToggleState: teamToggleState
+  });
+});
+
+app.get("/teamToggleState", (req, res) => {
+  res.json(teamToggleState);
+});
+
 app.get("/update", async (req, res) => {
   if (!req.query.team) {
     logger.error('Missing team parameter');
@@ -508,6 +573,13 @@ app.get("/update", async (req, res) => {
   }
 
   const team = parseInt(req.query.team);
+  
+  // Cek apakah tim diaktifkan
+  if (!teamToggleState[team - 1]) {
+    logger.error('Team is disabled', { team });
+    return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
+  }
+  
   const add = parseInt(req.query.add) || 0;
   const isFirst = req.query.first === "1";
   const ip = req.ip || req.connection.remoteAddress;
@@ -705,6 +777,11 @@ app.get("/health", (req, res) => {
       ip: esp32LastIP,
       status: esp32Connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE"
     },
+    teamToggle: {
+      state: teamToggleState,
+      activeCount: teamToggleState.filter(state => state).length,
+      disabledCount: teamToggleState.filter(state => !state).length
+    },
     connections: io.engine.clientsCount,
     environment: isProduction ? "production" : "development",
     rateLimiting: "Smart limits active",
@@ -714,7 +791,8 @@ app.get("/health", (req, res) => {
       esp32: "ESP32 Master Controller with Buzzer & LED System",
       safety: "5-second safety timeout implemented",
       jury: "Audio feedback untuk tombol juri (benar/salah)",
-      tracking: "ESP32 HTTP Heartbeat System Active"
+      tracking: "ESP32 HTTP Heartbeat System Active",
+      teamToggle: "Team toggle controls - Enable/disable individual teams"
     }
   });
 });
@@ -755,6 +833,7 @@ io.on("connection", (socket) => {
   socket.emit("scores", scores);
   socket.emit("config", config);
   socket.emit("lockstate", lockState);
+  socket.emit("teamToggleState", teamToggleState); // Kirim state toggle team
   
   if (isTimerRunning) {
     socket.emit("timerStart", { duration: timeRemaining });
@@ -782,11 +861,8 @@ async function startServer() {
     console.log('───────────────────────────────────────────────────────');
     console.log(`Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     console.log(`Port: ${PORT}`);
-    console.log(`Public directory: ${publicDirFound}`);
-    console.log(`Audio directory: ${audioDir}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log(`Health Check: http://localhost:${PORT}/health`);
     console.log('───────────────────────────────────────────────────────\n');
   });
 }

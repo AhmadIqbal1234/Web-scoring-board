@@ -13,6 +13,9 @@ let esp32Status = {
   ip: null
 };
 
+// Team Status Tracking - TAMBAHKAN INI
+let teamStatus = Array(TEAM_COUNT).fill(true); // true = aktif, false = nonaktif
+
 // Admin Logger
 const adminLogger = {
   info: (message, data = null) => {
@@ -67,8 +70,40 @@ function getTeamLetter(index) {
     return String.fromCharCode(64 + index);
 }
 
+// Function untuk toggle status tim - TAMBAHKAN INI
+function toggleTeamStatus(teamNumber) {
+    teamStatus[teamNumber - 1] = !teamStatus[teamNumber - 1];
+    
+    const teamCard = document.querySelector(`.team-card[data-team="${teamNumber}"]`);
+    const toggleBtn = document.getElementById(`toggle-${teamNumber}`);
+    const badgeEl = document.getElementById(`badge-${teamNumber}`);
+    
+    if (teamCard && toggleBtn && badgeEl) {
+        if (teamStatus[teamNumber - 1]) {
+            // Tim diaktifkan
+            teamCard.classList.remove('team-disabled');
+            toggleBtn.textContent = 'NONAKTIFKAN';
+            toggleBtn.classList.remove('toggle-off');
+            toggleBtn.classList.add('toggle-on');
+            badgeEl.textContent = "MENUNGGU";
+            badgeEl.className = "team-status status-waiting";
+        } else {
+            // Tim dinonaktifkan
+            teamCard.classList.add('team-disabled');
+            toggleBtn.textContent = 'AKTIFKAN';
+            toggleBtn.classList.remove('toggle-on');
+            toggleBtn.classList.add('toggle-off');
+            badgeEl.textContent = "NONAKTIF";
+            badgeEl.className = "team-status status-disabled";
+        }
+    }
+    
+    adminLogger.info(`Team ${getTeamLetter(teamNumber)} ${teamStatus[teamNumber - 1] ? 'diaktifkan' : 'dinonaktifkan'}`);
+    showNotification(`Tim ${getTeamLetter(teamNumber)} ${teamStatus[teamNumber - 1] ? 'diaktifkan' : 'dinonaktifkan'}`, "info");
+}
+
 function createTeamControls() {
-    adminLogger.info('Creating 2-rows team controls UI');
+    adminLogger.info('Creating 2-rows team controls UI with toggle');
     teamsContainer.innerHTML = '';
     teamsContainer.className = 'teams-two-rows-container';
     
@@ -92,18 +127,33 @@ function createTeamControls() {
             <div class="team-score-display">
                 <div class="team-score" id="score-${i}">0</div>
             </div>
+            <div class="team-controls">
+                <button class="team-toggle toggle-on" id="toggle-${i}">
+                    NONAKTIFKAN
+                </button>
+            </div>
         `;
         
-        // Add hover effect
-        teamDiv.style.cursor = 'pointer';
+        // Add hover effect - hanya untuk tim aktif
         teamDiv.addEventListener('mouseenter', () => {
-            teamDiv.style.transform = 'translateY(-3px)';
-            teamDiv.style.boxShadow = '0 8px 20px rgba(255, 215, 0, 0.2)';
+            if (teamStatus[i - 1]) { // Hanya efek hover untuk tim aktif
+                teamDiv.style.transform = 'translateY(-3px)';
+                teamDiv.style.boxShadow = '0 8px 20px rgba(255, 215, 0, 0.2)';
+            }
         });
         teamDiv.addEventListener('mouseleave', () => {
             teamDiv.style.transform = 'translateY(0)';
             teamDiv.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
         });
+        
+        // Add click event untuk toggle
+        const toggleBtn = teamDiv.querySelector(`#toggle-${i}`);
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent triggering team card click
+                toggleTeamStatus(i);
+            });
+        }
         
         // Distribute teams between two rows
         if (i <= 6) {
@@ -117,7 +167,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// Function untuk update ESP32 display - DIPERBAIKI
+// Function untuk update ESP32 display
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -207,7 +257,7 @@ function testESP32Connection() {
   showNotification("Test koneksi dikirim ke ESP32!", "success");
 }
 
-// Konfigurasi - DIPERBAIKI dengan error handling
+// Konfigurasi dengan error handling
 document.getElementById("setConfig").addEventListener("click", () => {
     const plus = parseInt(document.getElementById("plus").value, 10);
     const minus = parseInt(document.getElementById("minus").value, 10);
@@ -246,27 +296,210 @@ function updateConfigDisplay() {
     adminLogger.info('Config display updated', config);
 }
 
-// Reset - DIPERBAIKI
+// Reset dengan reset status tim juga
+// Helper: pastikan SweetAlert tersedia (load dinamis jika perlu)
+function ensureSwal() {
+    return new Promise((resolve) => {
+        if (typeof Swal !== 'undefined') return resolve(true);
+
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/sweetalert2@11';
+        script.async = true;
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+    });
+}
+
+// Custom confirmation modal used when SweetAlert isn't available
+function showCustomConfirm(title, message) {
+    return new Promise((resolve) => {
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.left = '0';
+        overlay.style.top = '0';
+        overlay.style.width = '100%';
+        overlay.style.height = '100%';
+        overlay.style.background = 'rgba(0,0,0,0.5)';
+        overlay.style.display = 'flex';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.zIndex = '9999';
+
+        const box = document.createElement('div');
+        box.style.background = '#fff';
+        box.style.borderRadius = '8px';
+        box.style.padding = '20px';
+        box.style.maxWidth = '420px';
+        box.style.width = '90%';
+        box.style.boxShadow = '0 8px 24px rgba(0,0,0,0.2)';
+        box.style.textAlign = 'left';
+
+        const t = document.createElement('h3');
+        t.textContent = title || 'Konfirmasi';
+        t.style.margin = '0 0 8px 0';
+
+        const m = document.createElement('p');
+        m.textContent = message || '';
+        m.style.margin = '0 0 16px 0';
+        m.style.color = '#333';
+
+        const btnRow = document.createElement('div');
+        btnRow.style.display = 'flex';
+        btnRow.style.justifyContent = 'flex-end';
+        btnRow.style.gap = '8px';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Batal';
+        cancelBtn.style.padding = '8px 12px';
+        cancelBtn.style.border = '1px solid #ccc';
+        cancelBtn.style.background = '#fff';
+        cancelBtn.style.borderRadius = '4px';
+
+        const okBtn = document.createElement('button');
+        okBtn.textContent = 'Ya, reset semua';
+        okBtn.style.padding = '8px 12px';
+        okBtn.style.border = 'none';
+        okBtn.style.background = '#d32f2f';
+        okBtn.style.color = '#fff';
+        okBtn.style.borderRadius = '4px';
+
+        btnRow.appendChild(cancelBtn);
+        btnRow.appendChild(okBtn);
+
+        box.appendChild(t);
+        box.appendChild(m);
+        box.appendChild(btnRow);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        function cleanup() {
+            if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        }
+
+        cancelBtn.addEventListener('click', () => {
+            cleanup();
+            resolve(false);
+        });
+
+        okBtn.addEventListener('click', () => {
+            cleanup();
+            resolve(true);
+        });
+    });
+}
+
+function doReset() {
+    const btn = document.getElementById('reset');
+    const originalInner = btn.dataset.originalInner || btn.innerHTML;
+    btn.dataset.originalInner = originalInner;
+
+    // Set loading state
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span></span> MEMPROSES...';
+
+    return fetch('/reset')
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .then(data => {
+            // Reset semua tim menjadi aktif
+            teamStatus = Array(TEAM_COUNT).fill(true);
+
+            // Update UI untuk semua tim
+            for (let i = 1; i <= TEAM_COUNT; i++) {
+                const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
+                const toggleBtn = document.getElementById(`toggle-${i}`);
+                const badgeEl = document.getElementById(`badge-${i}`);
+
+                if (teamCard && toggleBtn && badgeEl) {
+                    teamCard.classList.remove('team-disabled');
+                    toggleBtn.textContent = 'NONAKTIFKAN';
+                    toggleBtn.classList.remove('toggle-off');
+                    toggleBtn.classList.add('toggle-on');
+                    badgeEl.textContent = "MENUNGGU";
+                    badgeEl.className = "team-status status-waiting";
+                }
+            }
+
+            adminLogger.info('Scores and team status reset successfully', data);
+            return data;
+        })
+        .catch(err => {
+            adminLogger.error('Reset error:', err);
+            throw err;
+        })
+        .finally(() => {
+            // Restore button state
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            btn.innerHTML = btn.dataset.originalInner || 'RESET SEMUA SKOR';
+        });
+}
+
 document.getElementById("reset").addEventListener("click", () => {
     adminLogger.info('Reset scores requested');
-    if (confirm("Yakin reset semua skor ke 0?")) {
-        fetch('/reset')
-            .then(r => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
-            })
-            .then(data => {
-                adminLogger.info('Scores reset successfully', data);
-                showNotification("Semua skor berhasil direset!", "success");
-            })
-            .catch(err => {
-                adminLogger.error('Reset error:', err);
-                showNotification("Gagal reset skor!", "error");
+
+    ensureSwal().then((available) => {
+        if (!available) {
+            // Jika gagal memuat SweetAlert, tampilkan custom modal sebagai fallback (bukan native confirm)
+            showCustomConfirm('Yakin ingin mereset semua skor?', 'Semua skor akan diatur ke 0 dan semua tim akan diaktifkan kembali.').then(confirmed => {
+                if (confirmed) doReset();
             });
-    }
+            return;
+        }
+
+        const swalWithBootstrapButtons = Swal.mixin({
+            customClass: {
+                confirmButton: "btn btn-success",
+                cancelButton: "btn btn-danger"
+            },
+            buttonsStyling: false
+        });
+
+        swalWithBootstrapButtons.fire({
+            title: "Are you sure?",
+            text: "You won't be able to revert this!",
+            icon: "warning",
+            showCancelButton: true,
+            confirmButtonText: "Yes, reset it!",
+            cancelButtonText: "No, cancel!",
+            reverseButtons: true
+        }).then((result) => {
+            if (result.isConfirmed) {
+                doReset()
+                    .then(() => {
+                        swalWithBootstrapButtons.fire({
+                            title: "Reset!",
+                            text: "All scores have been reset.",
+                            icon: "success"
+                        });
+                    })
+                    .catch(() => {
+                        swalWithBootstrapButtons.fire({
+                            title: "Failed",
+                            text: "Failed to reset scores.",
+                            icon: "error"
+                        });
+                    });
+            } else if (result.dismiss === Swal.DismissReason.cancel) {
+                swalWithBootstrapButtons.fire({
+                    title: "Cancelled",
+                    text: "Reset cancelled.",
+                    icon: "error"
+                });
+            }
+        }).catch(err => {
+            adminLogger.error('SweetAlert error on reset:', err);
+            showNotification('Terjadi kesalahan pada dialog konfirmasi', 'error');
+        });
+    });
 });
 
-// Unlock - DIPERBAIKI
+// Unlock
 document.getElementById("unlock").addEventListener("click", () => {
     adminLogger.info('Manual unlock requested');
     fetch('/unlock')
@@ -284,7 +517,7 @@ document.getElementById("unlock").addEventListener("click", () => {
         });
 });
 
-// Event listeners untuk kontrol juri - DIPERBAIKI DENGAN ERROR HANDLING
+// Event listeners untuk kontrol juri
 function initializeJuryControls() {
     const juryPlus = document.getElementById("juryPlus");
     const juryMinus = document.getElementById("juryMinus");
@@ -303,7 +536,20 @@ function initializeJuryControls() {
 }
 
 function handleJuryPlus() {
+    // Validasi tambahan untuk memastikan tombol tidak bisa diklik ketika disabled
+    const juryPlus = document.getElementById("juryPlus");
+    if (juryPlus && juryPlus.disabled) {
+        adminLogger.warn('Jury plus clicked but button is disabled');
+        return;
+    }
+    
     if (lockState.activeTeam) {
+        // Cek apakah tim aktif tidak dinonaktifkan
+        if (!teamStatus[lockState.activeTeam - 1]) {
+            showNotification(`Tim ${getTeamLetter(lockState.activeTeam)} sedang dinonaktifkan!`, "warning");
+            return;
+        }
+        
         adminLogger.info('Jury plus clicked', { 
             activeTeam: lockState.activeTeam, 
             points: config.plus 
@@ -329,7 +575,20 @@ function handleJuryPlus() {
 }
 
 function handleJuryMinus() {
+    // Validasi tambahan untuk memastikan tombol tidak bisa diklik ketika disabled
+    const juryMinus = document.getElementById("juryMinus");
+    if (juryMinus && juryMinus.disabled) {
+        adminLogger.warn('Jury minus clicked but button is disabled');
+        return;
+    }
+    
     if (lockState.activeTeam) {
+        // Cek apakah tim aktif tidak dinonaktifkan
+        if (!teamStatus[lockState.activeTeam - 1]) {
+            showNotification(`Tim ${getTeamLetter(lockState.activeTeam)} sedang dinonaktifkan!`, "warning");
+            return;
+        }
+        
         adminLogger.info('Jury minus clicked', { 
             activeTeam: lockState.activeTeam, 
             points: config.minus 
@@ -354,7 +613,7 @@ function handleJuryMinus() {
     }
 }
 
-// Notification system - DIPERBAIKI
+// Notification system
 function showNotification(message, type = "success") {
     // Remove existing notification
     const existingNotification = document.querySelector('.admin-notification');
@@ -432,7 +691,7 @@ function updateTimerStatus(state, seconds) {
     adminLogger.info('Timer status updated', { state, seconds });
 }
 
-//Socket events untuk ESP32 - DIPERBAIKI
+//Socket events untuk ESP32
 socket.on("esp32Status", (status) => {
     adminLogger.event('esp32Status', status);
     updateESP32Status(status);
@@ -455,7 +714,7 @@ socket.on("esp32Activity", (activity) => {
     }
 });
 
-// Socket events - DIPERBAIKI
+// Socket events
 socket.on("config", (c) => {
     adminLogger.event('config', c);
     config = c;
@@ -473,6 +732,8 @@ socket.on("lockstate", (state) => {
     const juryControls = document.getElementById("juryControls");
     const waitingLabel = document.getElementById("waitingLabel");
     const activeTeamLabel = document.getElementById("activeTeamLabel");
+    const juryPlus = document.getElementById("juryPlus");
+    const juryMinus = document.getElementById("juryMinus");
 
     if (unlockBtn) {
         unlockBtn.textContent = state.locked ? 
@@ -492,6 +753,11 @@ socket.on("lockstate", (state) => {
             activeTeamLabel.textContent = `Tim ${getTeamLetter(state.activeTeam)} Sedang Aktif`;
             activeTeamLabel.style.display = "block";
         }
+        
+        // Enable tombol juri ketika ada tim aktif
+        if (juryPlus) juryPlus.disabled = false;
+        if (juryMinus) juryMinus.disabled = false;
+        
         adminLogger.info('Team activated', { activeTeam: state.activeTeam });
     } else {
         if (juryControls) {
@@ -500,23 +766,37 @@ socket.on("lockstate", (state) => {
         }
         if (waitingLabel) waitingLabel.style.display = "block";
         if (activeTeamLabel) activeTeamLabel.style.display = "none";
+        
+        // Nonaktifkan tombol juri (tapi biarkan tetap visible di DOM)
+        if (juryPlus) juryPlus.disabled = true;
+        if (juryMinus) juryMinus.disabled = true;
+        
         adminLogger.info('All teams unlocked');
     }
 
-    // Update team badges
+    // Update team badges dengan memperhitungkan status aktif/nonaktif
     for (let i = 1; i <= TEAM_COUNT; i++) {
         const badgeEl = document.getElementById(`badge-${i}`);
         const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
         
         if (badgeEl) {
-            if (state.locked && state.activeTeam === i) {
+            if (!teamStatus[i - 1]) {
+                // Tim dinonaktifkan
+                badgeEl.textContent = "NONAKTIF";
+                badgeEl.className = "team-status status-disabled";
+                if (teamCard) teamCard.classList.add('team-disabled');
+            } else if (state.locked && state.activeTeam === i) {
+                // Tim aktif dan sedang bermain
                 badgeEl.textContent = "AKTIF";
                 badgeEl.className = "team-status status-active";
                 if (teamCard) teamCard.classList.add('active');
+                if (teamCard) teamCard.classList.remove('team-disabled');
             } else {
+                // Tim aktif tapi menunggu
                 badgeEl.textContent = "MENUNGGU";
                 badgeEl.className = "team-status status-waiting";
                 if (teamCard) teamCard.classList.remove('active');
+                if (teamCard) teamCard.classList.remove('team-disabled');
             }
         }
     }
@@ -545,7 +825,7 @@ socket.on("reset", (scores) => {
     }
 });
 
-// Initialize - DIPERBAIKI
+// Initialize
 function initializeAdmin() {
     createTeamControls();
     initializeJuryControls();
@@ -592,56 +872,21 @@ function initializeAdmin() {
     });
 }
 
-// Add CSS for notification
-const notificationStyles = `
-.admin-notification {
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%) translateY(-100px);
-    background: #4caf50;
-    color: white;
-    padding: 1.2rem 2rem;
-    border-radius: 10px;
-    font-weight: 700;
-    z-index: 10000;
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
-    transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-    text-align: center;
-    min-width: 300px;
-    font-size: 1.1rem;
-}
-
-.admin-notification.show {
-    transform: translateX(-50%) translateY(0);
-}
-
-.admin-notification.error {
-    background: #f44336;
-}
-
-.admin-notification.warning {
-    background: #ff9800;
-    color: #000;
-}
-
-.admin-notification.success {
-    background: #4caf50;
-}
-
-.admin-notification.info {
-    background: #2196f3;
-}
-`;
-
-// Inject styles
-const styleSheet = document.createElement('style');
-styleSheet.textContent = notificationStyles;
-document.head.appendChild(styleSheet);
-
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     adminLogger.info('Admin panel initializing...');
     adminLogger.esp32('ESP32 monitoring system activated');
     initializeAdmin();
+    // Debug: laporkan apakah SweetAlert tersedia setelah inisialisasi
+    try {
+        if (typeof Swal === 'undefined') {
+            adminLogger.warn('SweetAlert2 tidak terdeteksi pada saat load. Mungkin diblokir atau gagal dimuat.');
+            showNotification('SweetAlert2 tidak ter-load; menggunakan fallback.', 'warning');
+        } else {
+            adminLogger.info('SweetAlert2 tersedia.');
+            showNotification('SweetAlert2 aktif.', 'success');
+        }
+    } catch (e) {
+        console.error('Error checking Swal availability', e);
+    }
 });

@@ -1,21 +1,18 @@
-﻿﻿
-<!doctype html>
+﻿﻿<!doctype html>
 <html lang="id" class="admin-page">
 <head>
   <meta charset="utf-8" />
- <!-- GANTI di admin.html dan index.html -->
-<link rel="icon" type="image/png" href="tts/android-chrome-192x192.png">
+  <link rel="icon" type="image/png" href="tts/android-chrome-192x192.png">
   <title>Admin Panel</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/admin.css" />
-  <!-- TAMBAHKAN sebelum </head> -->
-<script>
-// Force favicon load
-const favicon = document.createElement('link');
-favicon.rel = 'icon';
-favicon.href = 'tts/android-chrome-192x192.png?' + new Date().getTime();
-document.head.appendChild(favicon);
-</script>
+  <script>
+  // Force favicon load
+  const favicon = document.createElement('link');
+  favicon.rel = 'icon';
+  favicon.href = 'tts/android-chrome-192x192.png?' + new Date().getTime();
+  document.head.appendChild(favicon);
+  </script>
 </head>
 <body class="admin-page">
   <div class="connection-status-bar">
@@ -23,12 +20,10 @@ document.head.appendChild(favicon);
     TERHUBUNG KE SERVER
   </div>
 
-
   <div class="admin-header">
     <div class="admin-title">PANEL ADMIN</div>
     <div class="admin-subtitle">Cerdas Cermat SMK N 1 Wonosegoro</div>
   </div>
-
 
   <main class="admin-main">
     <section class="admin-panel">
@@ -73,7 +68,6 @@ document.head.appendChild(favicon);
         | <strong>Waktu Tersisa:</strong> <span id="currentTime">00:00</span>
       </div>
     </section>
-
 
     <section class="admin-panel">
       <h2 class="panel-title">Status ESP32 Controller</h2>
@@ -120,8 +114,7 @@ document.head.appendChild(favicon);
       </div>
     </section>
 
-    
-    <section class="admin-panel jury-section">
+    <section class="admin-panel jury-section toggle-section">
       <h2 class="panel-title">Kontrol Juri</h2>
       
       <div class="jury-status" id="juryStatus">
@@ -142,13 +135,12 @@ document.head.appendChild(favicon);
       </div>
     </section>
 
-
     <section class="admin-panel">
       <h2 class="panel-title">Manajemen 12 Tim</h2>
       
       <div class="teams-section">
         <div id="teams" class="teams-two-rows-container">
-          //tim card dai js/admin.js akan di inject sini
+          <!-- tim card dari js/admin.js akan di inject sini -->
         </div>
       </div>
     </section>
