@@ -3,7 +3,7 @@ const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
-let activeTeam = null;
+let teamToggleState = Array(TEAM_COUNT).fill(true);
 
 // Client Logger
 const clientLogger = {
@@ -20,25 +20,10 @@ const clientLogger = {
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
     console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
-  },
-  
-  event: (eventName, data = null) => {
-    const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] EVENT: ${eventName}`, data || '');
-  },
-  
-  audio: (message, data = null) => {
-    const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] AUDIO: ${message}`, data || '');
   }
 };
 
-// Audio elements untuk SOUND EFFECTS
-const buzzSound = document.getElementById("buzzSound");
-const correctSound = document.getElementById("correctSound");
-const wrongSound = document.getElementById("wrongSound");
-
-// SISTEM AUDIO FILE DENGAN CALLBACK - IMPROVED
+// SISTEM AUDIO FILE DENGAN CALLBACK
 class SistemAudioTim {
   constructor() {
     this.audioElements = new Map();
@@ -50,7 +35,6 @@ class SistemAudioTim {
   }
 
   inisialisasiAudio() {
-    // Preload audio elements untuk semua tim
     for (let i = 1; i <= TEAM_COUNT; i++) {
       const teamLetter = getTeamLetter(i);
       const audioFile = `Tim ${teamLetter}.mp3`;
@@ -62,19 +46,18 @@ class SistemAudioTim {
       this.audioElements.set(i, audioEl);
     }
     
-    clientLogger.audio('Sistem audio tim diinisialisasi');
+    clientLogger.info('Sistem audio tim diinisialisasi');
   }
 
   putarAudio(team, onAudioEnd = null) {
     if (this.sedangMemutar) {
-      clientLogger.audio('Audio sedang diputar, menghentikan yang lama');
+      clientLogger.info('Audio sedang diputar, menghentikan yang lama');
       this.berhenti();
     }
 
     const audioEl = this.audioElements.get(team);
     if (!audioEl) {
       clientLogger.error('Audio tidak ditemukan untuk tim:', team);
-      // Jika audio tidak ada, langsung trigger callback
       if (onAudioEnd) {
         setTimeout(() => this.executeCallback(onAudioEnd), 100);
       }
@@ -86,9 +69,8 @@ class SistemAudioTim {
       this.audioSekarang = audioEl;
       this.onAudioEndCallback = onAudioEnd;
 
-      // Set handler untuk ketika audio selesai
       audioEl.onended = () => {
-        clientLogger.audio('Audio selesai diputar - executing callback');
+        clientLogger.info('Audio selesai diputar - executing callback');
         this.sedangMemutar = false;
         if (this.onAudioEndCallback) {
           this.executeCallback(this.onAudioEndCallback);
@@ -98,9 +80,8 @@ class SistemAudioTim {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
+        clientLogger.info(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
         
-        // Tampilkan pesan AI
         const aiMessageEl = document.getElementById("aiMessage");
         if (aiMessageEl) {
           aiMessageEl.textContent = `Tombol ditekan oleh Tim ${getTeamLetter(team)}!`;
@@ -114,7 +95,6 @@ class SistemAudioTim {
       }).catch(error => {
         clientLogger.error('Gagal memutar audio:', error);
         this.sedangMemutar = false;
-        // Jika gagal play, langsung trigger callback setelah delay
         if (this.onAudioEndCallback) {
           setTimeout(() => {
             this.executeCallback(this.onAudioEndCallback);
@@ -142,9 +122,8 @@ class SistemAudioTim {
     clientLogger.error(`Error audio untuk Tim ${teamLetter}:`, event);
     this.sedangMemutar = false;
     
-    // Jika ada callback, eksekusi meski audio error
     if (this.onAudioEndCallback) {
-      clientLogger.audio('Executing callback despite audio error');
+      clientLogger.info('Executing callback despite audio error');
       setTimeout(() => {
         this.executeCallback(this.onAudioEndCallback);
         this.onAudioEndCallback = null;
@@ -157,8 +136,7 @@ class SistemAudioTim {
       switch (callbackData.action) {
         case 'startTimer':
           if (callbackData.team) {
-            clientLogger.audio(`Memulai timer untuk Tim ${getTeamLetter(callbackData.team)} setelah audio selesai`);
-            // Beri tahu server bahwa audio selesai dan timer bisa mulai
+            clientLogger.info(`Memulai timer untuk Tim ${getTeamLetter(callbackData.team)} setelah audio selesai`);
             this.notifyServerAudioFinished(callbackData.team);
           }
           break;
@@ -180,14 +158,12 @@ class SistemAudioTim {
       })
       .catch(err => {
         clientLogger.error('Audio finish callback error:', err);
-        // Fallback: coba start timer langsung jika server error
         this.fallbackTimerStart(team);
       });
   }
 
   fallbackTimerStart(team) {
     clientLogger.warn('Using fallback timer start for team:', team);
-    // Kirim request tambahan untuk memastikan timer mulai
     fetch(`/update?team=${team}&add=0&first=1`)
       .then(r => {
         if (r.ok) {
@@ -207,7 +183,7 @@ class SistemAudioTim {
   }
 }
 
-// Sistem Audio untuk Timer Countdown - IMPROVED
+// Sistem Audio untuk Timer Countdown
 class TimerAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -230,7 +206,7 @@ class TimerAudioSystem {
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.audio('Sistem audio timer countdown diinisialisasi');
+    clientLogger.info('Sistem audio timer countdown diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -250,7 +226,7 @@ class TimerAudioSystem {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`Memutar audio timer: ${audioFile}`);
+        clientLogger.info(`Memutar audio timer: ${audioFile}`);
       }).catch(error => {
         clientLogger.error('Gagal memutar audio timer:', error);
         this.sedangMemutar = false;
@@ -258,9 +234,8 @@ class TimerAudioSystem {
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.audio('Audio timer selesai');
+        clientLogger.info('Audio timer selesai');
         
-        // Beri tahu server bahwa audio timer selesai
         if (audioFile === 'waktu habis.mp3') {
           fetch(`/audioFinished?action=timerEnd&type=timer`)
             .catch(e => clientLogger.error('Timer end notification failed:', e));
@@ -285,7 +260,7 @@ class TimerAudioSystem {
   }
 }
 
-// Sistem Audio untuk Juri - BARU
+// Sistem Audio untuk Juri
 class JuryAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -306,7 +281,7 @@ class JuryAudioSystem {
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.audio('Sistem audio juri diinisialisasi');
+    clientLogger.info('Sistem audio juri diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -326,7 +301,7 @@ class JuryAudioSystem {
 
       audioEl.currentTime = 0;
       audioEl.play().then(() => {
-        clientLogger.audio(`Memutar audio juri: ${audioFile}`);
+        clientLogger.info(`Memutar audio juri: ${audioFile}`);
       }).catch(error => {
         clientLogger.error('Gagal memutar audio juri:', error);
         this.sedangMemutar = false;
@@ -334,7 +309,7 @@ class JuryAudioSystem {
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.audio('Audio juri selesai');
+        clientLogger.info('Audio juri selesai');
       };
 
       return true;
@@ -358,7 +333,7 @@ class JuryAudioSystem {
 // Inisialisasi sistem audio
 const audioTim = new SistemAudioTim();
 const timerAudio = new TimerAudioSystem();
-const juryAudio = new JuryAudioSystem(); // Sistem audio juri
+const juryAudio = new JuryAudioSystem();
 
 // TIMER FUNCTIONS
 function updateTimerDisplay(seconds) {
@@ -408,8 +383,7 @@ function showActiveTeam(team) {
         activeEl.classList.add("active");
     }
     
-    activeTeam = team;
-    clientLogger.info(`Team display updated`, { activeTeam, activeTeamLetter: getTeamLetter(team) });
+    clientLogger.info(`Team display updated`, { activeTeam: team, activeTeamLetter: getTeamLetter(team) });
 }
 
 // Fungsi reset tampilan
@@ -420,7 +394,6 @@ function resetDisplay() {
         if (el) el.classList.remove("active", "hidden");
     }
     overlay.classList.remove("active");
-    activeTeam = null;
 }
 
 // Helper tim
@@ -428,7 +401,44 @@ function getTeamLetter(index) {
     return String.fromCharCode(65 + index - 1);
 }
 
-// Render tim di papan
+// Update tampilan berdasarkan status toggle tim
+function updateTeamDisplay() {
+    clientLogger.info('Updating team display based on toggle state', { teamToggleState });
+    
+    for (let i = 1; i <= TEAM_COUNT; i++) {
+        const el = document.getElementById("team-" + i);
+        if (el) {
+            if (teamToggleState[i - 1]) {
+                el.style.display = "flex";
+                el.style.visibility = "visible";
+                el.style.opacity = "1";
+                el.style.pointerEvents = "auto";
+            } else {
+                el.style.display = "none";
+                el.style.visibility = "hidden";
+                el.style.opacity = "0";
+                el.style.pointerEvents = "none";
+                clientLogger.info(`Hiding team ${i} (${getTeamLetter(i)}) because it's disabled`);
+            }
+        } else {
+            clientLogger.warn(`Team element not found: team-${i}`);
+        }
+    }
+    
+    setTimeout(() => {
+        const grid = document.querySelector('.grid');
+        if (grid) {
+            grid.style.display = 'none';
+            setTimeout(() => {
+                grid.style.display = 'grid';
+            }, 10);
+        }
+    }, 50);
+    
+    clientLogger.info('Team display update completed');
+}
+
+// Render tim di papan dengan memperhitungkan status toggle
 function renderInitial() {
     board.innerHTML = "";
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -439,14 +449,19 @@ function renderInitial() {
             <h2>Tim ${getTeamLetter(i)}</h2>
             <div class="score" id="score-${i}">0</div>
         `;
+        
         board.appendChild(el);
     }
     clientLogger.info(`Initial teams rendered`, { teamCount: TEAM_COUNT });
+    
+    setTimeout(() => {
+        updateTeamDisplay();
+    }, 100);
 }
 
 renderInitial();
 
-// Socket event handlers - DIPERBAIKI
+// Socket event handlers
 socket.on("connect", () => {
     clientLogger.info('Connected to server');
     
@@ -456,26 +471,32 @@ socket.on("connect", () => {
         liveIndicator.textContent = '● LIVE - Terhubung ke Server';
     }
     
-    fetch('/scores')
-        .then(r => r.json())
-        .then(data => {
-            clientLogger.info('Initial scores loaded', { scores: data });
-            for (let i = 0; i < data.length; i++) {
-                const el = document.getElementById("score-" + (i + 1));
-                if (el) el.textContent = data[i];
-            }
-        })
-        .catch(err => clientLogger.error('Error fetching scores:', err));
+    Promise.all([
+        fetch('/scores').then(r => r.json()),
+        fetch('/lockstate').then(r => r.json()),
+        fetch('/teamToggleState').then(r => r.json())
+    ])
+    .then(([scoresData, lockStateData, toggleStateData]) => {
+        clientLogger.info('Initial scores loaded', { scores: scoresData });
+        for (let i = 0; i < scoresData.length; i++) {
+            const el = document.getElementById("score-" + (i + 1));
+            if (el) el.textContent = scoresData[i];
+        }
         
-    fetch('/lockstate')
-        .then(r => r.json())
-        .then(data => {
-            clientLogger.info('Initial lock state loaded', { lockState: data });
-            if (data.locked && data.activeTeam) {
-                showActiveTeam(data.activeTeam);
-            }
-        })
-        .catch(err => clientLogger.error('Error fetching lockstate:', err));
+        clientLogger.info('Initial lock state loaded', { lockState: lockStateData });
+        if (lockStateData.locked && lockStateData.activeTeam) {
+            showActiveTeam(lockStateData.activeTeam);
+        }
+        
+        clientLogger.info('Initial team toggle state loaded', { teamToggleState: toggleStateData });
+        if (Array.isArray(toggleStateData) && toggleStateData.length === TEAM_COUNT) {
+            teamToggleState = toggleStateData;
+            updateTeamDisplay();
+        }
+    })
+    .catch(err => {
+        clientLogger.error('Error loading initial data:', err);
+    });
 });
 
 socket.on("disconnect", () => {
@@ -489,7 +510,7 @@ socket.on("disconnect", () => {
 
 // Update skor realtime
 socket.on("update", payload => {
-    clientLogger.event('update', payload);
+    clientLogger.info('update', payload);
     const { team, score } = payload;
     const el = document.getElementById("score-" + team);
     if (el) {
@@ -501,7 +522,7 @@ socket.on("update", payload => {
 
 // Reset semua skor
 socket.on("reset", arr => {
-    clientLogger.event('reset', { scores: arr });
+    clientLogger.info('reset', { scores: arr });
     if (Array.isArray(arr)) {
         arr.forEach((s, idx) => {
             const el = document.getElementById("score-" + (idx + 1));
@@ -517,35 +538,75 @@ socket.on("reset", arr => {
 
 // Status kunci tim
 socket.on("lockstate", state => {
-    clientLogger.event('lockstate', state);
+    clientLogger.info('lockstate', state);
     if (!state.locked) {
         resetDisplay();
-    } else if (state.activeTeam && !activeTeam) {
+    } else if (state.activeTeam) {
         showActiveTeam(state.activeTeam);
+    }
+});
+
+// Event untuk update status toggle tim individual
+socket.on("teamToggleUpdate", data => {
+    clientLogger.info('teamToggleUpdate', data);
+    const { team, enabled } = data;
+    
+    if (team >= 1 && team <= TEAM_COUNT) {
+        teamToggleState[team - 1] = enabled;
+        clientLogger.info('Team toggle state updated', { 
+            team, 
+            teamLetter: getTeamLetter(team),
+            enabled, 
+            teamToggleState 
+        });
+        updateTeamDisplay();
+    } else {
+        clientLogger.error('Invalid team number in teamToggleUpdate', data);
+    }
+});
+
+// Event untuk enable semua tim
+socket.on("allTeamsEnabled", () => {
+    clientLogger.info('allTeamsEnabled');
+    teamToggleState = Array(TEAM_COUNT).fill(true);
+    clientLogger.info('All teams enabled', { teamToggleState });
+    updateTeamDisplay();
+});
+
+// Event untuk disable semua tim
+socket.on("allTeamsDisabled", () => {
+    clientLogger.info('allTeamsDisabled');
+    teamToggleState = Array(TEAM_COUNT).fill(false);
+    clientLogger.info('All teams disabled', { teamToggleState });
+    updateTeamDisplay();
+});
+
+// Event untuk initial team toggle state
+socket.on("teamToggleState", data => {
+    clientLogger.info('teamToggleState', data);
+    if (Array.isArray(data) && data.length === TEAM_COUNT) {
+        teamToggleState = data;
+        clientLogger.info('Team toggle state received from server', { teamToggleState });
+        updateTeamDisplay();
+    } else {
+        clientLogger.error('Invalid team toggle state data received', data);
     }
 });
 
 // Suara tombol buzzer
 socket.on("buzz", ({ team }) => {
-    clientLogger.event('buzz', { team, teamLetter: getTeamLetter(team) });
+    clientLogger.info('buzz', { team, teamLetter: getTeamLetter(team) });
     
     showActiveTeam(team);
-    
-    if (buzzSound) {
-        buzzSound.currentTime = 0;
-        buzzSound.play().catch(e => clientLogger.audio('Buzzer audio play failed:', e));
-        clientLogger.audio('Buzzer sound played');
-    }
 });
 
-// HANDLER AUDIO YANG DIPERBAIKI
+// HANDLER AUDIO
 socket.on("playTeamAudio", (data) => {
-    clientLogger.event('playTeamAudio', data);
+    clientLogger.info('playTeamAudio', data);
     const { team, audioFile, timerDuration } = data;
 
-    clientLogger.audio(`Memulai audio untuk Tim ${getTeamLetter(team)}: ${audioFile}`);
+    clientLogger.info(`Memulai audio untuk Tim ${getTeamLetter(team)}: ${audioFile}`);
     
-    // Putar audio tim dengan callback untuk mulai timer setelah selesai
     const audioSuccess = audioTim.putarAudio(team, {
         action: "startTimer",
         team: team,
@@ -554,7 +615,6 @@ socket.on("playTeamAudio", (data) => {
     
     if (!audioSuccess) {
         clientLogger.warn('Audio playback failed, using fallback');
-        // Fallback: langsung mulai timer jika audio gagal
         setTimeout(() => {
             fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
                 .catch(e => clientLogger.error('Fallback audio finish failed:', e));
@@ -563,23 +623,21 @@ socket.on("playTeamAudio", (data) => {
 });
 
 socket.on("playTimerAudio", (data) => {
-    clientLogger.event('playTimerAudio', data);
+    clientLogger.info('playTimerAudio', data);
     const { seconds, audioFile } = data;
     
     timerAudio.putarAudio(audioFile);
 });
 
-// HANDLER AUDIO JURI - BARU
+// HANDLER AUDIO JURI
 socket.on("playJuryAudio", (data) => {
-    clientLogger.event('playJuryAudio', data);
+    clientLogger.info('playJuryAudio', data);
     const { isCorrect, audioFile } = data;
 
-    clientLogger.audio(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
+    clientLogger.info(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
     
-    // Putar audio juri
     juryAudio.putarAudio(audioFile);
     
-    // Tampilkan pesan AI untuk juri
     const aiMessageEl = document.getElementById("aiMessage");
     if (aiMessageEl) {
         const message = isCorrect ? 'JAWABAN BENAR!' : 'JAWABAN SALAH!';
@@ -596,7 +654,7 @@ socket.on("playJuryAudio", (data) => {
 let aiMessageTimeout;
 
 socket.on("aiMessage", (data) => {
-    clientLogger.event('aiMessage', data);
+    clientLogger.info('aiMessage', data);
     const aiMessageEl = document.getElementById("aiMessage");
     const message = data.message;
 
@@ -621,21 +679,9 @@ socket.on("aiMessage", (data) => {
     }, 4000);
 });
 
-// Suara juri
-socket.on("scoring", ({ team, isCorrect }) => {
-    clientLogger.event('scoring', { team, isCorrect });
-    
-    const sound = isCorrect ? correctSound : wrongSound;
-    if (sound) {
-        sound.currentTime = 0;
-        sound.play().catch(e => clientLogger.audio('Scoring audio play failed:', e));
-        clientLogger.audio(`${isCorrect ? 'Correct' : 'Wrong'} sound played`);
-    }
-});
-
 // TIMER EVENTS FROM SERVER
 socket.on("timerStart", (data) => {
-    clientLogger.event('timerStart', data);
+    clientLogger.info('timerStart', data);
     if (data.duration) {
         updateTimerDisplay(data.duration);
         clientLogger.info('Timer started');
@@ -643,28 +689,24 @@ socket.on("timerStart", (data) => {
 });
 
 socket.on("timerUpdate", (data) => {
-    clientLogger.event('timerUpdate', data);
+    clientLogger.info('timerUpdate', data);
     if (data.timeRemaining !== undefined) {
         updateTimerDisplay(data.timeRemaining);
     }
 });
 
 socket.on("timerEnd", () => {
-    clientLogger.event('timerEnd');
+    clientLogger.info('timerEnd');
     updateTimerDisplay(0);
 });
 
 socket.on("timerReset", () => {
-    clientLogger.event('timerReset');
+    clientLogger.info('timerReset');
     resetTimerDisplay();
 });
-
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
-    clientLogger.info('Display initialized - IMPROVED Audio System + Timer Sync + Jury Audio');
-    clientLogger.info('Fixed: Audio-Timer synchronization with 5s safety timeout');
-    clientLogger.info('Fixed: Better error handling and fallback mechanisms');
-    clientLogger.info('Added: Jury audio feedback system (benar/salah)');
+    clientLogger.info('Display initialized - IMPROVED Audio System + Timer Sync + Jury Audio + Team Toggle');
 });

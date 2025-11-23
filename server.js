@@ -33,30 +33,27 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// ===== SMART RATE LIMITING - FIXED IP DETECTION =====
+// ===== SMART RATE LIMITING =====
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 menit
+  windowMs: 15 * 60 * 1000,
   max: (req) => {
-    // Dapatkan IP client dengan method yang benar
     let clientIP = req.ip || 
                   req.connection.remoteAddress || 
                   req.socket.remoteAddress ||
                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
     
-    // Debug logging untuk development
     if (!isProduction) {
       console.log(`[RATE LIMIT] Client IP: ${clientIP}, URL: ${req.url}`);
     }
     
-    // Whitelist untuk ESP32 dan development
     const whitelistIPs = [
-      '192.168.1.',    // ESP32 IP range
-      '127.0.0.1',     // Localhost IPv4
-      '::1',           // Localhost IPv6
-      '::ffff:127.0.0.1', // Localhost alternative
-      '::ffff:192.168.1.', // ESP32 IPv6 format
-      '172.',          // Docker internal
-      '10.'            // Private network
+      '192.168.1.',
+      '127.0.0.1',
+      '::1',
+      '::ffff:127.0.0.1',
+      '::ffff:192.168.1.',
+      '172.',
+      '10.'
     ];
     
     const whitelistURLs = [
@@ -68,20 +65,13 @@ const limiter = rateLimit({
       '/update'
     ];
     
-    // Cek apakah IP di whitelist
     const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
-    
-    // Cek apakah URL di whitelist
     const isWhitelistedURL = whitelistURLs.some(url => req.url.startsWith(url));
     
     if (isWhitelistedIP || isWhitelistedURL) {
-      if (!isProduction) {
-        console.log(`[RATE LIMIT] Whitelisted - IP: ${clientIP}, URL: ${req.url}`);
-      }
-      return 10000; // Practically unlimited untuk whitelist
+      return 10000;
     }
     
-    // Untuk external IPs
     return isProduction ? 100 : 1000;
   },
   message: {
@@ -91,14 +81,13 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req, res) => {
-    // Skip successful requests dari logging
     return res.statusCode < 400;
   }
 });
 
 app.use(limiter);
 
-// CORS setup untuk semua environment
+// CORS setup
 const io = new Server(http, {
   cors: {
     origin: isProduction 
@@ -136,16 +125,6 @@ const logger = {
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
     console.log(`[${timestamp}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-  },
-  
-  audio: (message, data = null) => {
-    const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[${timestamp}] AUDIO: ${message}`, data ? JSON.stringify(data, null, 2) : '');
-  },
-  
-  esp32: (message, data = null) => {
-    const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[${timestamp}] ESP32: ${message}`, data ? JSON.stringify(data, null, 2) : '');
   }
 };
 
@@ -177,7 +156,7 @@ class TimerAudioSystem {
         seconds: seconds,
         audioFile: audioFile
       });
-      logger.audio(`Memutar countdown audio: ${audioFile}`);
+      logger.info(`Memutar countdown audio: ${audioFile}`);
     }
   }
 
@@ -188,7 +167,7 @@ class TimerAudioSystem {
         isCorrect: isCorrect,
         audioFile: audioFile
       });
-      logger.audio(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
+      logger.info(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
     }
   }
 }
@@ -198,12 +177,6 @@ const timerAudio = new TimerAudioSystem();
 // Helper function untuk nama tim
 function getTeamLetter(teamNumber) {
   return String.fromCharCode(64 + teamNumber);
-}
-
-// Get audio file name untuk tim
-function getTeamAudioFile(teamNumber) {
-  const teamLetter = getTeamLetter(teamNumber);
-  return `Tim ${teamLetter}.mp3`;
 }
 
 // Generate feedback messages untuk juri
@@ -231,7 +204,7 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// Validasi file audio - DIPERBAIKI PATH untuk production
+// Validasi file audio
 function validateAudioFiles() {
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
@@ -274,7 +247,7 @@ function validateAudioFiles() {
     const filePath = join(audioDirFound, file);
     if (fs.existsSync(filePath)) {
       foundFiles.push(file);
-      logger.audio(`Audio file found: ${file}`);
+      logger.info(`Audio file found: ${file}`);
     } else {
       missingFiles.push(file);
       logger.error(`Audio file missing: ${file}`);
@@ -298,7 +271,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// TIMER SYSTEM - IMPROVED DENGAN SAFETY MECHANISM
+// TIMER SYSTEM
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.info("Timer already running, ignoring start request");
@@ -365,23 +338,16 @@ function resetTimer() {
   logger.info("Timer reset");
 }
 
-// Start timer setelah audio selesai - IMPROVED DENGAN SAFETY TIMEOUT
+// Start timer setelah audio selesai
 function startTimerAfterAudio(team) {
   logger.info("Starting timer after audio finished", { team });
   
-  // Safety timeout: jika setelah 5 detik belum ada konfirmasi audio selesai, start timer anyway
   audioFinishTimeout = setTimeout(() => {
     if (!isTimerRunning) {
       logger.info("SAFETY TIMEOUT: Starting timer after 5 seconds (audio might have failed)", { team });
       startTimer(team);
     }
   }, 5000);
-  
-  setTimeout(() => {
-    if (!isTimerRunning) {
-      logger.info("Audio playback should have started, waiting for client confirmation...", { team });
-    }
-  }, 500);
 }
 
 // Function untuk update ESP32 status dan broadcast
@@ -392,13 +358,13 @@ function updateESP32Status(connected, socket = null, ip = null) {
     lastEsp32Activity = new Date();
     esp32SocketId = socket.id;
     esp32LastIP = ip;
-    logger.esp32("ESP32 Controller Connected", {
+    logger.info("ESP32 Controller Connected", {
       socketId: socket.id,
       ip: ip,
       timestamp: lastEsp32Activity.toISOString()
     });
   } else if (!connected) {
-    logger.esp32("ESP32 Controller Disconnected", {
+    logger.info("ESP32 Controller Disconnected", {
       socketId: esp32SocketId,
       timestamp: new Date().toISOString()
     });
@@ -412,18 +378,17 @@ function updateESP32Status(connected, socket = null, ip = null) {
   });
 }
 
-// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based)
+// ROUTE UNTUK ESP32 CHECK-IN
 app.get("/esp32checkin", (req, res) => {
   const action = req.query.action || 'heartbeat';
   const team = req.query.team;
   const ip = req.ip || req.connection.remoteAddress;
   
-  // Update ESP32 status
   esp32Connected = true;
   lastEsp32Activity = new Date();
   esp32LastIP = ip;
   
-  logger.esp32(`ESP32 HTTP Check-in: ${action}`, {
+  logger.info(`ESP32 HTTP Check-in: ${action}`, {
     team: team,
     ip: ip,
     timestamp: lastEsp32Activity.toISOString()
@@ -445,7 +410,7 @@ app.get("/esp32checkin", (req, res) => {
   });
 });
 
-// ===== STATIC FILE SERVING dengan path yang robust =====
+// ===== STATIC FILE SERVING =====
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
   join(__dirname, "public"),
@@ -574,7 +539,6 @@ app.get("/update", async (req, res) => {
 
   const team = parseInt(req.query.team);
   
-  // Cek apakah tim diaktifkan
   if (!teamToggleState[team - 1]) {
     logger.error('Team is disabled', { team });
     return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
@@ -586,10 +550,9 @@ app.get("/update", async (req, res) => {
 
   logger.info('/update called', { team, add, isFirst, ip });
 
-  // LOG ACTIVITY JIKA DARI ESP32
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
     lastEsp32Activity = new Date();
-    logger.esp32("ESP32 Activity", {
+    logger.info("ESP32 Activity", {
       type: "buzzer",
       team: team,
       action: isFirst ? "first_press" : "scoring",
@@ -614,7 +577,7 @@ app.get("/update", async (req, res) => {
     io.emit("lockstate", lockState);
     io.emit("buzz", { team });
     
-    const audioFile = getTeamAudioFile(team);
+    const audioFile = `Tim ${getTeamLetter(team)}.mp3`;
     
     io.emit("playTeamAudio", {
       team: team,
@@ -622,7 +585,7 @@ app.get("/update", async (req, res) => {
       timerDuration: config.timerDuration
     });
     
-    logger.audio(`Memutar "${audioFile}" - Timer akan mulai setelah audio selesai`);
+    logger.info(`Memutar "${audioFile}" - Timer akan mulai setelah audio selesai`);
     
     startTimerAfterAudio(team);
   }
@@ -630,7 +593,6 @@ app.get("/update", async (req, res) => {
   if (add !== 0) {
     scores[team - 1] += add;
     io.emit("update", { team, score: scores[team - 1] });
-    io.emit("scoring", { team, isCorrect: add > 0 });
     
     timerAudio.playJuryAudio(add > 0);
     
@@ -676,24 +638,6 @@ app.get("/audioFinished", (req, res) => {
     message: "Audio finished processed",
     timerStarted: isTimerRunning
   });
-});
-
-app.get("/triggerAudio", (req, res) => {
-  const team = parseInt(req.query.team);
-  
-  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-    return res.status(400).json({ error: "Tim tidak valid" });
-  }
-  
-  const audioFile = getTeamAudioFile(team);
-  io.emit("playTeamAudio", {
-    team: team,
-    audioFile: audioFile,
-    timerDuration: config.timerDuration
-  });
-  
-  logger.audio(`Manual audio trigger for team ${team}`);
-  res.json({ success: true, team: team, audioFile: audioFile });
 });
 
 app.get("/unlock", (req, res) => {
@@ -753,8 +697,7 @@ app.get("/esp32status", (req, res) => {
       "12 Team Buzzer Buttons",
       "Jury Controls (Correct/Wrong)", 
       "LED Feedback",
-      "WiFi Manager Configuration",
-      "Audio Trigger Support"
+      "WiFi Manager Configuration"
     ],
     status: esp32Connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE"
   });
@@ -783,17 +726,7 @@ app.get("/health", (req, res) => {
       disabledCount: teamToggleState.filter(state => !state).length
     },
     connections: io.engine.clientsCount,
-    environment: isProduction ? "production" : "development",
-    rateLimiting: "Smart limits active",
-    services: {
-      audio: "Audio File System - File per Tim & Timer Countdown & Juri",
-      timer: "START AFTER AUDIO - Timer mulai setelah audio selesai",
-      esp32: "ESP32 Master Controller with Buzzer & LED System",
-      safety: "5-second safety timeout implemented",
-      jury: "Audio feedback untuk tombol juri (benar/salah)",
-      tracking: "ESP32 HTTP Heartbeat System Active",
-      teamToggle: "Team toggle controls - Enable/disable individual teams"
-    }
+    environment: isProduction ? "production" : "development"
   });
 });
 
@@ -824,7 +757,7 @@ io.on("connection", (socket) => {
 
   if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
     updateESP32Status(true, socket, clientIP);
-    logger.esp32("ESP32 Controller detected via Socket.IO", {
+    logger.info("ESP32 Controller detected via Socket.IO", {
       socketId: socket.id,
       ip: clientIP
     });
@@ -833,11 +766,31 @@ io.on("connection", (socket) => {
   socket.emit("scores", scores);
   socket.emit("config", config);
   socket.emit("lockstate", lockState);
-  socket.emit("teamToggleState", teamToggleState); // Kirim state toggle team
+  socket.emit("teamToggleState", teamToggleState);
   
   if (isTimerRunning) {
     socket.emit("timerStart", { duration: timeRemaining });
   }
+
+  socket.on("toggleTeam", (data) => {
+    const { teamId, enabled } = data;
+    if (teamId >= 1 && teamId <= TEAM_COUNT) {
+      teamToggleState[teamId - 1] = enabled;
+      logger.info("Team toggle from admin", { teamId, enabled });
+      
+      io.emit("teamToggleUpdate", {
+        team: teamId,
+        enabled: enabled
+      });
+    }
+  });
+
+  socket.on("enableAllTeams", () => {
+    teamToggleState = Array(TEAM_COUNT).fill(true);
+    logger.info("Enable all teams from admin");
+    
+    io.emit("allTeamsEnabled");
+  });
 
   socket.on("disconnect", (reason) => {
     if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
@@ -854,7 +807,7 @@ io.on("connection", (socket) => {
 
 // Startup server
 async function startServer() {
-  const audioDir = validateAudioFiles();
+  validateAudioFiles();
   
   http.listen(PORT, async () => {
     console.log('\nSISTEM KUIS - Ridwan and Team');

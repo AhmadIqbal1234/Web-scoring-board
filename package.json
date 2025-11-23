@@ -22,9 +22,9 @@
   "license": "MIT",
   "dependencies": {
     "express": "^4.21.2",
-    "socket.io": "^4.8.1",
+    "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
-    "express-rate-limit": "^7.1.5"
+    "socket.io": "^4.8.1"
   },
   "engines": {
     "node": ">=18.0.0"

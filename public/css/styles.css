@@ -174,11 +174,60 @@ main {
   position: relative;
 }
 
+/* PERBAIKAN: Grid layout yang responsif dan rata tengah */
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1rem;
   padding: 1rem 0;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Layout khusus untuk jumlah tim tertentu agar rata tengah */
+.grid[data-visible-teams="1"] {
+  grid-template-columns: 1fr;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+.grid[data-visible-teams="2"] {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.grid[data-visible-teams="3"] {
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.grid[data-visible-teams="4"] {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.grid[data-visible-teams="5"] {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.grid[data-visible-teams="6"] {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.grid[data-visible-teams="7"],
+.grid[data-visible-teams="8"] {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.grid[data-visible-teams="9"],
+.grid[data-visible-teams="10"] {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+.grid[data-visible-teams="11"],
+.grid[data-visible-teams="12"] {
+  grid-template-columns: repeat(6, 1fr);
 }
 
 /* ===== TEAM CARD STYLES ===== */
@@ -410,64 +459,46 @@ footer h5 {
   letter-spacing: 1px;
 }
 
-/* ===== TEST PANEL STYLES ===== */
-#testPanel {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: rgba(30, 30, 30, 0.95);
-  color: white;
-  padding: 15px;
-  border-radius: 12px;
-  border: 2px solid var(--primary-color);
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  z-index: 1000;
-  font-family: sans-serif;
-  max-width: 400px;
-  backdrop-filter: blur(10px);
-}
-
-#testPanel h3 {
-  width: 100%;
-  text-align: center;
-  margin-bottom: 10px;
-  color: var(--primary-color);
-  font-size: 1rem;
-}
-
-.test-btn {
-  background: #444;
-  color: #fff;
-  border: none;
-  padding: 8px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.8rem;
-  transition: 0.3s;
-  flex: 1;
-  min-width: 80px;
-}
-
-.test-btn:hover {
-  background: var(--primary-color);
-  color: #000;
-}
-
 /* ===== RESPONSIVE DESIGN ===== */
 @media (max-width: 1200px) {
   .grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
+  
+  .grid[data-visible-teams="7"],
+  .grid[data-visible-teams="8"] {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .grid[data-visible-teams="9"],
+  .grid[data-visible-teams="10"] {
+    grid-template-columns: repeat(5, 1fr);
+  }
+  
+  .grid[data-visible-teams="11"],
+  .grid[data-visible-teams="12"] {
+    grid-template-columns: repeat(6, 1fr);
   }
 }
 
 @media (max-width: 900px) {
   .grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.8rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  
+  .grid[data-visible-teams="5"],
+  .grid[data-visible-teams="6"] {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .grid[data-visible-teams="7"],
+  .grid[data-visible-teams="8"] {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .grid[data-visible-teams="9"],
+  .grid[data-visible-teams="10"] {
+    grid-template-columns: repeat(5, 1fr);
   }
 
   .event-title {
@@ -497,18 +528,44 @@ footer h5 {
   .timer {
     font-size: 3rem;
   }
-
-  #testPanel {
-    max-width: 350px;
-    bottom: 10px;
-    right: 10px;
-  }
 }
 
 @media (max-width: 600px) {
   .grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.8rem;
+  }
+  
+  .grid[data-visible-teams="1"] {
     grid-template-columns: 1fr;
-    gap: 0.5rem;
+    max-width: 300px;
+  }
+  
+  .grid[data-visible-teams="2"] {
+    grid-template-columns: repeat(2, 1fr);
+    max-width: 400px;
+  }
+  
+  .grid[data-visible-teams="3"],
+  .grid[data-visible-teams="4"],
+  .grid[data-visible-teams="5"],
+  .grid[data-visible-teams="6"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .grid[data-visible-teams="7"],
+  .grid[data-visible-teams="8"] {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .grid[data-visible-teams="9"],
+  .grid[data-visible-teams="10"] {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .grid[data-visible-teams="11"],
+  .grid[data-visible-teams="12"] {
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .header-container {
@@ -559,19 +616,20 @@ footer h5 {
   .timer-container {
     padding: 0.6rem 1rem;
   }
-
-  #testPanel {
-    position: relative;
-    bottom: auto;
-    right: auto;
-    max-width: 100%;
-    margin: 10px;
-    order: 1;
-  }
 }
 
 /* Extra small devices */
 @media (max-width: 400px) {
+  .grid {
+    grid-template-columns: 1fr;
+    max-width: 300px;
+    margin: 0 auto;
+  }
+  
+  .grid[data-visible-teams="2"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .ai-message {
     font-size: 1.3rem;
     top: 18%;
@@ -617,3 +675,4 @@ footer h5 {
     opacity: 0.5;
   }
 }
+
