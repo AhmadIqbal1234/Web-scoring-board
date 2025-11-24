@@ -1,7 +1,7 @@
 /*
   quiz-scoring.ino
-  ESP32 master for Quiz Scoring system - OPTIMIZED VERSION
-  - Smart polling intervals untuk menghindari rate limiting
+  ESP32 master for Quiz Scoring system - OPTIMIZED VERSION WITH DYNAMIC PCF DETECTION
+  - Modified for dynamic PCF8574 detection (1-4 modules)
   - Copyright © 2025 Ridwan and Team
 */
 
@@ -12,8 +12,8 @@
 #include <ArduinoJson.h>
 
 // ======= Configurable defaults =======
-const char *DEFAULT_SERVER_HOST = "192.168.1.5"; // Ganti dengan URL Railway saat production
-const int DEFAULT_SERVER_PORT = 8080;
+const char *DEFAULT_SERVER_HOST = "web-scoring-board-production.up.railway.app";
+const int DEFAULT_SERVER_PORT = 443;
 const char *WIFI_AP_NAME = "Quiz_Config";
 
 // PCF8574 I2C addresses
@@ -23,26 +23,31 @@ const uint8_t PCF_ADDR[4] = {0x20, 0x21, 0x22, 0x23};
 const int PIN_JURY_CORRECT = 4; // GPIO4
 const int PIN_JURY_WRONG = 5;   // GPIO5
 
-// SMART TIMINGS (ms) - OPTIMIZED UNTUK RATE LIMITING
-const unsigned long POLL_INTERVAL = 12;     // I2C poll interval (tetap cepat)
-const unsigned long DEBOUNCE_MS = 40;       // button debounce
-const unsigned long JURY_DEBOUNCE_MS = 500; // jury button debounce
-const unsigned long LOCK_POLL_MS = 2000;    // OPTIMIZED: 2 detik (dari 500ms)
-const unsigned long CONFIG_POLL_MS = 30000; // OPTIMIZED: 30 detik (dari 60s)
-const unsigned long WIFI_CHECK_MS = 15000;  // WiFi check interval
-const unsigned long STATUS_REPORT_MS = 60000; // Status report interval
-const unsigned long HEARTBEAT_INTERVAL = 60000; // OPTIMIZED: 60 detik (dari 30s)
+// OPTIMIZED TIMINGS (ms)
+const unsigned long POLL_INTERVAL = 12;
+const unsigned long DEBOUNCE_MS = 40;
+const unsigned long JURY_DEBOUNCE_MS = 80;
+const unsigned long LOCK_POLL_MS = 5000;
+const unsigned long CONFIG_POLL_MS = 60000;
+const unsigned long WIFI_CHECK_MS = 15000;
+const unsigned long STATUS_REPORT_MS = 60000;
+const unsigned long HEARTBEAT_INTERVAL = 60000;
 
 // ===== State =====
 char serverHost[64];
 int serverPort = DEFAULT_SERVER_PORT;
 
 bool lockActive = false;
-int activeTeam = 0; // 1..12
+int activeTeam = 0;
+
+// Dynamic PCF configuration
+bool pcfDetected[4] = {false, false, false, false};
+int totalPCFCount = 0;
+int totalTeams = 0;
 
 // per-panel output cache for PCF (P0..P7)
 uint8_t pcfOutCache[4];
-uint8_t lastRead[4]; // last raw read from PCF
+uint8_t lastRead[4];
 
 unsigned long lastI2CPoll = 0;
 unsigned long lastLockPoll = 0;
@@ -50,13 +55,71 @@ unsigned long lastConfigPoll = 0;
 unsigned long lastWiFiCheck = 0;
 unsigned long lastStatusReport = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastDebounceTime[14]; // 12 players + 2 jury
+unsigned long lastDebounceTime[14];
+
+// JURY STATE TRACKING
+bool lastJuryCorrectState = HIGH;
+bool lastJuryWrongState = HIGH;
 
 int plusValue = 5;
 int minusValue = -2;
 
+// ===== PCF Detection and Configuration =====
+void detectPCFModules() {
+    Serial.println("Scanning for PCF8574 modules...");
+    totalPCFCount = 0;
+    
+    for (int i = 0; i < 4; i++) {
+        Wire.beginTransmission(PCF_ADDR[i]);
+        byte error = Wire.endTransmission();
+        
+        if (error == 0) {
+            pcfDetected[i] = true;
+            totalPCFCount++;
+            Serial.printf("Found PCF8574 at address 0x%02X\n", PCF_ADDR[i]);
+        } else {
+            pcfDetected[i] = false;
+            Serial.printf("No PCF8574 at address 0x%02X\n", PCF_ADDR[i]);
+        }
+    }
+    
+    totalTeams = totalPCFCount * 3;
+    Serial.printf("Total PCF modules detected: %d\n", totalPCFCount);
+    Serial.printf("Total teams available: %d\n", totalTeams);
+    
+    // Report to server
+    if (WiFi.status() == WL_CONNECTED) {
+        String url = String("https://") + serverHost + "/esp32checkin?action=pcf_detection&count=" + 
+                    String(totalPCFCount) + "&teams=" + String(totalTeams);
+        HTTPClient http;
+        http.setConnectTimeout(3000);
+        http.setTimeout(3000);
+        http.begin(url);
+        http.GET();
+        http.end();
+    }
+}
+
+bool isPCFActive(int panelIdx) {
+    return (panelIdx >= 0 && panelIdx < 4 && pcfDetected[panelIdx]);
+}
+
+bool isTeamValid(int team) {
+    return (team >= 1 && team <= totalTeams);
+}
+
 // ===== Helpers: PCF read/write using Wire =====
 bool writePCF(uint8_t addr, uint8_t value) {
+    bool detected = false;
+    for (int i = 0; i < 4; i++) {
+        if (PCF_ADDR[i] == addr && pcfDetected[i]) {
+            detected = true;
+            break;
+        }
+    }
+    
+    if (!detected) return false;
+    
     Wire.beginTransmission(addr);
     Wire.write(value);
     byte result = Wire.endTransmission();
@@ -69,6 +132,16 @@ bool writePCF(uint8_t addr, uint8_t value) {
 }
 
 bool readPCF(uint8_t addr, uint8_t &value) {
+    bool detected = false;
+    for (int i = 0; i < 4; i++) {
+        if (PCF_ADDR[i] == addr && pcfDetected[i]) {
+            detected = true;
+            break;
+        }
+    }
+    
+    if (!detected) return false;
+    
     for (int i = 0; i < 10; i++) {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() == 0) {
@@ -87,24 +160,27 @@ bool readPCF(uint8_t addr, uint8_t &value) {
 // Initialize PCF caches to all HIGH (inputs)
 void pcfInitCaches() {
     for (int i = 0; i < 4; ++i) {
-        pcfOutCache[i] = 0xFF; // all HIGH (inputs/LED off)
-        lastRead[i] = 0xFF;
-        if (!writePCF(PCF_ADDR[i], pcfOutCache[i])) {
-            Serial.printf("[WARNING] Failed to initialize PCF at 0x%02x\n", PCF_ADDR[i]);
+        if (pcfDetected[i]) {
+            pcfOutCache[i] = 0xFF;
+            lastRead[i] = 0xFF;
+            if (!writePCF(PCF_ADDR[i], pcfOutCache[i])) {
+                Serial.printf("[WARNING] Failed to initialize PCF at 0x%02x\n", PCF_ADDR[i]);
+            }
         }
     }
 }
 
 // Set LED for panel (ledIndex 0..2) on/off
 void setPanelLED(int panelIdx, int ledIndex, bool on) {
-    if (panelIdx < 0 || panelIdx >= 4 || ledIndex < 0 || ledIndex > 2)
+    if (!isPCFActive(panelIdx) || ledIndex < 0 || ledIndex > 2)
         return;
-    uint8_t mask = (1 << (4 + ledIndex)); // P4..P6
+        
+    uint8_t mask = (1 << (4 + ledIndex));
     uint8_t cur = pcfOutCache[panelIdx];
     if (on)
-        cur &= ~mask; // sink => write 0 to light
+        cur &= ~mask;
     else
-        cur |= mask; // set bit to 1 to turn off
+        cur |= mask;
     pcfOutCache[panelIdx] = cur;
     
     if (!writePCF(PCF_ADDR[panelIdx], cur)) {
@@ -114,9 +190,11 @@ void setPanelLED(int panelIdx, int ledIndex, bool on) {
 
 void clearAllLEDs() {
     for (int i = 0; i < 4; ++i) {
-        pcfOutCache[i] |= ((1 << 4) | (1 << 5) | (1 << 6));
-        if (!writePCF(PCF_ADDR[i], pcfOutCache[i])) {
-            Serial.printf("[ERROR] Failed to clear LEDs for PCF at 0x%02x\n", PCF_ADDR[i]);
+        if (pcfDetected[i]) {
+            pcfOutCache[i] |= ((1 << 4) | (1 << 5) | (1 << 6));
+            if (!writePCF(PCF_ADDR[i], pcfOutCache[i])) {
+                Serial.printf("[ERROR] Failed to clear LEDs for PCF at 0x%02x\n", PCF_ADDR[i]);
+            }
         }
     }
 }
@@ -124,8 +202,8 @@ void clearAllLEDs() {
 // ===== HTTP helpers =====
 String httpGetString(const String &url) {
     HTTPClient http;
-    http.setConnectTimeout(10000);
-    http.setTimeout(10000);
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
     http.begin(url);
     
     int code = http.GET();
@@ -148,10 +226,10 @@ void logToServer(const String& message, const String& type = "info") {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/health";
+    String url = String("https://") + serverHost + "/health";
     HTTPClient http;
-    http.setConnectTimeout(5000);
-    http.setTimeout(5000);
+    http.setConnectTimeout(3000);
+    http.setTimeout(3000);
     http.begin(url);
     
     int code = http.GET();
@@ -166,7 +244,7 @@ void sendHeartbeatToServer() {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/esp32checkin?action=heartbeat";
+    String url = String("https://") + serverHost + "/esp32checkin?action=heartbeat&teams=" + String(totalTeams);
     HTTPClient http;
     http.setConnectTimeout(3000);
     http.setTimeout(3000);
@@ -174,9 +252,9 @@ void sendHeartbeatToServer() {
     
     int code = http.GET();
     if (code == 200) {
-        Serial.println("[ESP32-HEARTBEAT] ✅ Status reported to server");
+        Serial.println("[HEARTBEAT] Status reported to server");
     } else {
-        Serial.printf("[ESP32-HEARTBEAT] ❌ Failed: %d\n", code);
+        Serial.printf("[HEARTBEAT] Failed: %d\n", code);
     }
     http.end();
 }
@@ -186,7 +264,7 @@ void reportActivityToServer(const String& activity, int team = 0) {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/esp32checkin?action=" + activity;
+    String url = String("https://") + serverHost + "/esp32checkin?action=" + activity;
     if (team > 0) {
         url += "&team=" + String(team);
     }
@@ -198,7 +276,7 @@ void reportActivityToServer(const String& activity, int team = 0) {
     
     int code = http.GET();
     if (code == 200) {
-        Serial.printf("[ESP32-ACTIVITY] ✅ %s reported\n", activity.c_str());
+        Serial.printf("[ACTIVITY] %s reported\n", activity.c_str());
     }
     http.end();
 }
@@ -209,66 +287,80 @@ void sendUpdateToServer(int team, int add, bool isFirst) {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/update?team=" + String(team) + "&add=" + String(add);
-    if (isFirst) {
-        url += "&first=1";
-        Serial.printf("[ESP32-BUZZ] Team %d FIRST PRESS - Audio triggered\n", team);
-        logToServer("Team " + String(team) + " buzzer pressed - FIRST", "buzzer");
-        
-        reportActivityToServer("buzzer_press", team);
-    }
-        
-    HTTPClient http;
-    http.setConnectTimeout(10000);
-    http.setTimeout(10000);
-    http.begin(url);
-    
-    int code = http.GET();
-    Serial.printf("[ESP32-HTTP] /update -> code=%d team=%d add=%d first=%d\n", code, team, add, isFirst ? 1 : 0);
-    
-    http.end();
-}
-
-void sendAudioTriggerToServer(int team) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[WARNING] WiFi not connected, cannot trigger audio");
+    if (!isTeamValid(team)) {
+        Serial.printf("[WARNING] Invalid team %d (max teams: %d)\n", team, totalTeams);
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/triggerAudio?team=" + String(team);
+    String url = String("https://") + serverHost + "/update?team=" + String(team) + "&add=" + String(add);
+    if (isFirst) {
+        url += "&first=1";
+        Serial.printf("[BUZZ] Team %d FIRST PRESS\n", team);
+    }
+        
     HTTPClient http;
-    http.setConnectTimeout(10000);
-    http.setTimeout(10000);
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
+    http.begin(url);
     
-    Serial.printf("[AUDIO] Triggering audio for team %d\n", team);
-    logToServer("Audio triggered for team " + String(team), "audio");
+    unsigned long startTime = millis();
+    int code = http.GET();
+    unsigned long responseTime = millis() - startTime;
+    
+    Serial.printf("[HTTP] /update -> code=%d team=%d add=%d first=%d time=%dms\n", 
+                  code, team, add, isFirst ? 1 : 0, responseTime);
+    
+    http.end();
+    
+    if (code == 200 && isFirst) {
+        reportActivityToServer("buzzer_press", team);
+    }
+}
+
+void sendJuryUpdateToServer(int team, int add, const char* action) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("[JURY] WiFi not connected for %s\n", action);
+        return;
+    }
+    
+    if (!lockActive || !isTeamValid(team)) {
+        Serial.printf("[JURY] No active team for %s\n", action);
+        return;
+    }
+    
+    String url = String("https://") + serverHost + "/update?team=" + String(team) + "&add=" + String(add);
+    
+    HTTPClient http;
+    http.setConnectTimeout(3000);
+    http.setTimeout(3000);
+    
+    unsigned long startTime = millis();
     http.begin(url);
     
     int code = http.GET();
-    Serial.printf("[AUDIO] /triggerAudio -> code=%d team=%d\n", code, team);
+    unsigned long responseTime = millis() - startTime;
     
-    if (code != 200) {
-        Serial.printf("[AUDIO ERROR] Failed to trigger audio: %d\n", code);
-        Serial.println("[AUDIO] Using fallback - sending regular update");
-        sendUpdateToServer(team, 0, true);
-    }
+    Serial.printf("[JURY] %s -> code=%d, team=%d, points=%d, time=%dms\n", 
+                  action, code, team, add, responseTime);
     
     http.end();
+    
+    if (code == 200) {
+        reportActivityToServer("jury_" + String(action), team);
+    }
 }
 
-// fetch /lockstate and update lockActive & activeTeam
 void pollLockState() {
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/lockstate";
+    String url = String("https://") + serverHost + "/lockstate";
     String payload = httpGetString(url);
     
     if (payload.length() == 0) {
-        // Jangan log error terus-menerus, hanya occasional
         static unsigned long lastErrorLog = 0;
-        if (millis() - lastErrorLog > 10000) { // Log setiap 10 detik max
+        if (millis() - lastErrorLog > 10000) {
             Serial.println("[LOCK] Empty response from /lockstate");
             lastErrorLog = millis();
         }
@@ -293,32 +385,24 @@ void pollLockState() {
     if (newLock != lockActive) {
         lockActive = newLock;
         Serial.printf("[LOCK] changed -> %d active=%d\n", lockActive, newActive);
-        
-        if (lockActive) {
-            logToServer("System LOCKED - Team " + String(newActive) + " active", "lock");
-        } else {
-            logToServer("System UNLOCKED", "unlock");
-        }
     }
     activeTeam = newActive;
 
-    // update LEDs: if unlocked, clear; if locked, ensure LED of active team is on
     if (!lockActive) {
         clearAllLEDs();
-    } else if (activeTeam >= 1 && activeTeam <= 12) {
+    } else if (isTeamValid(activeTeam)) {
         int p = (activeTeam - 1) / 3;
         int b = (activeTeam - 1) % 3;
         setPanelLED(p, b, true);
     }
 }
 
-// fetch config (plus/minus)
 void pollConfig() {
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/config";
+    String url = String("https://") + serverHost + "/config";
     String payload = httpGetString(url);
     
     if (payload.length() == 0) {
@@ -345,14 +429,11 @@ void pollConfig() {
 void checkWiFiConnection() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[WiFi] Connection lost, attempting reconnect...");
-        logToServer("WiFi connection lost - attempting reconnect", "wifi");
         WiFi.reconnect();
         delay(1000);
         
         if (WiFi.status() == WL_CONNECTED) {
             Serial.println("[WiFi] Reconnected successfully");
-            logToServer("WiFi reconnected successfully", "wifi");
-            
             sendHeartbeatToServer();
         } else {
             Serial.println("[WiFi] Reconnect failed");
@@ -365,7 +446,7 @@ void sendStatusReport() {
         return;
     }
     
-    String url = String("http://") + serverHost + ":" + String(serverPort) + "/health";
+    String url = String("https://") + serverHost + "/health";
     HTTPClient http;
     http.setConnectTimeout(5000);
     http.setTimeout(5000);
@@ -373,9 +454,9 @@ void sendStatusReport() {
     
     int code = http.GET();
     if (code == 200) {
-        Serial.println("[ESP32-STATUS] Periodic health report sent");
+        Serial.println("[STATUS] Periodic health report sent");
     } else {
-        Serial.printf("[ESP32-STATUS] Health report failed: %d\n", code);
+        Serial.printf("[STATUS] Health report failed: %d\n", code);
     }
     http.end();
 }
@@ -386,6 +467,8 @@ void pollPCFButtons() {
     bool readSuccess[4] = {false, false, false, false};
     
     for (int i = 0; i < 4; ++i) {
+        if (!pcfDetected[i]) continue;
+        
         uint8_t val;
         if (readPCF(PCF_ADDR[i], val)) {
             buf[i] = val;
@@ -398,13 +481,15 @@ void pollPCFButtons() {
     unsigned long now = millis();
     
     for (int panel = 0; panel < 4; ++panel) {
-        if (!readSuccess[panel]) continue;
+        if (!pcfDetected[panel] || !readSuccess[panel]) continue;
         
         uint8_t cur = buf[panel];
         for (int b = 0; b < 3; ++b) {
             bool pressed = (((cur >> b) & 0x01) == 0);
             bool wasPressed = (((lastRead[panel] >> b) & 0x01) == 0);
             int teamIndex = panel * 3 + b + 1;
+            
+            if (teamIndex > totalTeams) continue;
             
             if (pressed && !wasPressed) {
                 if (!lockActive) {
@@ -415,8 +500,6 @@ void pollPCFButtons() {
                         Serial.printf("[BUZZ] Team %d pressed (panel %d btn %d)\n", teamIndex, panel, b);
                         
                         setPanelLED(panel, b, true);
-                        
-                        sendAudioTriggerToServer(teamIndex);
                         sendUpdateToServer(teamIndex, 0, true);
                     }
                 }
@@ -430,44 +513,59 @@ void pollPCFButtons() {
 void handleJuryButtons() {
     unsigned long now = millis();
     
-    if (digitalRead(PIN_JURY_CORRECT) == LOW) {
+    bool currentCorrect = (digitalRead(PIN_JURY_CORRECT) == LOW);
+    bool currentWrong = (digitalRead(PIN_JURY_WRONG) == LOW);
+    
+    if (currentCorrect && !lastJuryCorrectState) {
         if (now - lastDebounceTime[12] > JURY_DEBOUNCE_MS) {
             lastDebounceTime[12] = now;
             
-            if (lockActive && activeTeam >= 1 && activeTeam <= 12) {
+            if (lockActive && isTeamValid(activeTeam)) {
                 Serial.printf("[JURY] Correct for team %d\n", activeTeam);
-                logToServer("Jury CORRECT for team " + String(activeTeam), "jury");
                 
-                reportActivityToServer("jury_correct", activeTeam);
+                int panel = (activeTeam - 1) / 3;
+                int led = (activeTeam - 1) % 3;
+                setPanelLED(panel, led, false);
+                delay(30);
+                setPanelLED(panel, led, true);
                 
-                sendUpdateToServer(activeTeam, plusValue, false);
+                sendJuryUpdateToServer(activeTeam, plusValue, "correct");
             } else {
                 Serial.println("[JURY] Correct pressed but no active team");
             }
         }
     }
+    lastJuryCorrectState = currentCorrect;
     
-    if (digitalRead(PIN_JURY_WRONG) == LOW) {
+    if (currentWrong && !lastJuryWrongState) {
         if (now - lastDebounceTime[13] > JURY_DEBOUNCE_MS) {
             lastDebounceTime[13] = now;
             
-            if (lockActive && activeTeam >= 1 && activeTeam <= 12) {
+            if (lockActive && isTeamValid(activeTeam)) {
                 Serial.printf("[JURY] Wrong for team %d\n", activeTeam);
-                logToServer("Jury WRONG for team " + String(activeTeam), "jury");
                 
-                reportActivityToServer("jury_wrong", activeTeam);
+                int panel = (activeTeam - 1) / 3;
+                int led = (activeTeam - 1) % 3;
+                setPanelLED(panel, led, false);
+                delay(80);
+                setPanelLED(panel, led, true);
+                delay(40);
+                setPanelLED(panel, led, false);
+                delay(80);
+                setPanelLED(panel, led, true);
                 
-                sendUpdateToServer(activeTeam, minusValue, false);
+                sendJuryUpdateToServer(activeTeam, minusValue, "wrong");
             } else {
                 Serial.println("[JURY] Wrong pressed but no active team");
             }
         }
     }
+    lastJuryWrongState = currentWrong;
 }
 
 // ===== WiFiManager custom parameters =====
 WiFiManagerParameter custom_server_host("host", "Server host (IP or hostname)", DEFAULT_SERVER_HOST, 64);
-WiFiManagerParameter custom_server_port("port", "Server port", "8080", 6);
+WiFiManagerParameter custom_server_port("port", "Server port", "443", 6);
 
 void setupWiFiManager() {
     WiFiManager wm;
@@ -483,9 +581,14 @@ void setupWiFiManager() {
         ESP.restart();
     }
 
-    strncpy(serverHost, custom_server_host.getValue(), sizeof(serverHost) - 1);
+    String hostValue = custom_server_host.getValue();
+    hostValue.replace("http://", "");
+    hostValue.replace("https://", "");
+    
+    strncpy(serverHost, hostValue.c_str(), sizeof(serverHost) - 1);
     serverHost[sizeof(serverHost) - 1] = 0;
     serverPort = atoi(custom_server_port.getValue());
+    
     Serial.printf("Connected. serverHost=%s serverPort=%d\n", serverHost, serverPort);
 }
 
@@ -493,30 +596,19 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n🎯 QUIZ SCORING SYSTEM - OPTIMIZED VERSION");
-    Serial.println("✅ Fixed: Smart rate limiting compatibility");
-    Serial.println("✅ Optimized: Polling intervals untuk menghindari 429");
-    Serial.println("✅ Enhanced: Error handling dan logging");
+    Serial.println("QUIZ SCORING SYSTEM - DYNAMIC PCF DETECTION");
+    Serial.println("Feature: Automatic PCF8574 detection (1-4 modules)");
+    Serial.println("Feature: Dynamic team count based on detected modules");
 
     Wire.begin(21, 22);
     Wire.setClock(100000);
     Wire.setTimeOut(100);
     
-    Serial.println("Scanning I2C devices...");
-    bool foundDevices = false;
+    detectPCFModules();
     
-    for (byte addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            Serial.printf("Found I2C device at 0x%02x\n", addr);
-            foundDevices = true;
-        }
-    }
-    
-    if (!foundDevices) {
-        Serial.println("No I2C devices found! Check wiring.");
-    } else {
-        Serial.println("I2C scan completed successfully");
+    if (totalPCFCount == 0) {
+        Serial.println("WARNING: No PCF8574 modules detected!");
+        Serial.println("System will continue but no buttons/LEDs will work");
     }
 
     delay(500);
@@ -526,13 +618,16 @@ void setup() {
     pinMode(PIN_JURY_CORRECT, INPUT_PULLUP);
     pinMode(PIN_JURY_WRONG, INPUT_PULLUP);
 
+    lastJuryCorrectState = digitalRead(PIN_JURY_CORRECT);
+    lastJuryWrongState = digitalRead(PIN_JURY_WRONG);
+    
     for (int i = 0; i < 14; ++i)
         lastDebounceTime[i] = 0;
 
     setupWiFiManager();
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[ESP32-INIT] Sending initial heartbeat to server...");
+        Serial.println("Sending initial heartbeat to server...");
         sendHeartbeatToServer();
         reportActivityToServer("controller_startup");
     }
@@ -540,30 +635,25 @@ void setup() {
     pollConfig();
     pollLockState();
 
-    logToServer("ESP32 Controller Started - System Ready", "startup");
+    logToServer("ESP32 Controller Started - Dynamic PCF Detection", "startup");
 
-    Serial.println("✅ Setup completed successfully");
-    Serial.println("✅ System ready with optimized polling + rate limiting compatibility");
+    Serial.println("Setup completed successfully");
+    Serial.printf("Available teams: %d (from %d PCF modules)\n", totalTeams, totalPCFCount);
 }
 
 void loop() {
     unsigned long now = millis();
+
+    handleJuryButtons();
 
     if (now - lastI2CPoll >= POLL_INTERVAL) {
         lastI2CPoll = now;
         pollPCFButtons();
     }
 
-    handleJuryButtons();
-
     if (now - lastLockPoll >= LOCK_POLL_MS) {
         lastLockPoll = now;
         pollLockState();
-    }
-
-    if (now - lastConfigPoll >= CONFIG_POLL_MS) {
-        lastConfigPoll = now;
-        pollConfig();
     }
 
     if (now - lastWiFiCheck >= WIFI_CHECK_MS) {
@@ -571,13 +661,18 @@ void loop() {
         checkWiFiConnection();
     }
 
+    if (now - lastConfigPoll >= CONFIG_POLL_MS) {
+        lastConfigPoll = now;
+        pollConfig();
+    }
+
     if (now - lastStatusReport >= STATUS_REPORT_MS) {
         lastStatusReport = now;
         sendStatusReport();
         
-        Serial.println("[STATUS] System running - WiFi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-        Serial.printf("[STATUS] Lock: %s, Active Team: %d\n", lockActive ? "YES" : "NO", activeTeam);
-        Serial.printf("[STATUS] Config: plus=%d, minus=%d\n", plusValue, minusValue);
+        Serial.println("System running - WiFi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
+        Serial.printf("PCF Modules: %d/%d, Teams: %d\n", totalPCFCount, 4, totalTeams);
+        Serial.printf("Lock: %s, Active Team: %d\n", lockActive ? "YES" : "NO", activeTeam);
     }
 
     if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {

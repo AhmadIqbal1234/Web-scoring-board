@@ -5,7 +5,7 @@ const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
 let teamToggleState = Array(TEAM_COUNT).fill(true);
 
-// Client Logger
+// IMPROVED: Client Logger dengan lebih banyak info
 const clientLogger = {
   info: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
@@ -14,22 +14,29 @@ const clientLogger = {
   
   warn: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ⚠️ ${message}`, data || '');
   },
   
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ❌ ${message}`, data || '');
+  },
+  
+  success: (message, data = null) => {
+    const timestamp = new Date().toLocaleTimeString('id-ID');
+    console.log(`[CLIENT:${timestamp}] ✅ ${message}`, data || '');
   }
 };
 
-// SISTEM AUDIO FILE DENGAN CALLBACK
+// IMPROVED: SISTEM AUDIO FILE DENGAN BETTER ERROR HANDLING
 class SistemAudioTim {
   constructor() {
     this.audioElements = new Map();
     this.sedangMemutar = false;
     this.audioSekarang = null;
     this.onAudioEndCallback = null;
+    this.retryCount = 0;
+    this.maxRetries = 2;
     
     this.inisialisasiAudio();
   }
@@ -41,17 +48,33 @@ class SistemAudioTim {
       const audioEl = new Audio(`/audio/${audioFile}`);
       
       audioEl.preload = 'auto';
-      audioEl.onerror = (e) => this.handleAudioError(e, teamLetter);
+      audioEl.onerror = (e) => this.handleAudioError(e, teamLetter, audioFile);
       
       this.audioElements.set(i, audioEl);
     }
     
-    clientLogger.info('Sistem audio tim diinisialisasi');
+    clientLogger.success('Sistem audio tim diinisialisasi');
+  }
+
+  handleAudioError(event, teamLetter, audioFile) {
+    clientLogger.error(`Error audio untuk Tim ${teamLetter}:`, { 
+      audioFile, 
+      error: event.target.error 
+    });
+    this.sedangMemutar = false;
+    
+    if (this.onAudioEndCallback) {
+      clientLogger.info('Executing callback despite audio error');
+      setTimeout(() => {
+        this.executeCallback(this.onAudioEndCallback);
+        this.onAudioEndCallback = null;
+      }, 500);
+    }
   }
 
   putarAudio(team, onAudioEnd = null) {
     if (this.sedangMemutar) {
-      clientLogger.info('Audio sedang diputar, menghentikan yang lama');
+      clientLogger.warn('Audio sedang diputar, menghentikan yang lama');
       this.berhenti();
     }
 
@@ -68,10 +91,12 @@ class SistemAudioTim {
       this.sedangMemutar = true;
       this.audioSekarang = audioEl;
       this.onAudioEndCallback = onAudioEnd;
+      this.retryCount = 0;
 
       audioEl.onended = () => {
-        clientLogger.info('Audio selesai diputar - executing callback');
+        clientLogger.success('Audio selesai diputar - executing callback');
         this.sedangMemutar = false;
+        this.retryCount = 0;
         if (this.onAudioEndCallback) {
           this.executeCallback(this.onAudioEndCallback);
           this.onAudioEndCallback = null;
@@ -79,55 +104,52 @@ class SistemAudioTim {
       };
 
       audioEl.currentTime = 0;
-      audioEl.play().then(() => {
-        clientLogger.info(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
-        
-        const aiMessageEl = document.getElementById("aiMessage");
-        if (aiMessageEl) {
-          aiMessageEl.textContent = `Tombol ditekan oleh Tim ${getTeamLetter(team)}!`;
-          aiMessageEl.classList.add("show");
-          
-          setTimeout(() => {
-            aiMessageEl.classList.remove("show");
-          }, 3000);
-        }
-        
-      }).catch(error => {
-        clientLogger.error('Gagal memutar audio:', error);
-        this.sedangMemutar = false;
-        if (this.onAudioEndCallback) {
-          setTimeout(() => {
-            this.executeCallback(this.onAudioEndCallback);
-            this.onAudioEndCallback = null;
-          }, 500);
-        }
-      });
-
+      
+      const playPromise = audioEl.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            clientLogger.success(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
+            
+            const aiMessageEl = document.getElementById("aiMessage");
+            if (aiMessageEl) {
+              aiMessageEl.textContent = `Tombol ditekan oleh Tim ${getTeamLetter(team)}!`;
+              aiMessageEl.classList.add("show");
+              
+              setTimeout(() => {
+                aiMessageEl.classList.remove("show");
+              }, 3000);
+            }
+          })
+          .catch(error => {
+            clientLogger.error('Gagal memutar audio:', error);
+            this.handlePlayError(team, onAudioEnd);
+          });
+      }
+      
       return true;
       
     } catch (error) {
       clientLogger.error('Exception audio:', error);
-      this.sedangMemutar = false;
-      if (this.onAudioEndCallback) {
-        setTimeout(() => {
-          this.executeCallback(this.onAudioEndCallback);
-          this.onAudioEndCallback = null;
-        }, 500);
-      }
+      this.handlePlayError(team, onAudioEnd);
       return false;
     }
   }
 
-  handleAudioError(event, teamLetter) {
-    clientLogger.error(`Error audio untuk Tim ${teamLetter}:`, event);
+  handlePlayError(team, onAudioEnd) {
     this.sedangMemutar = false;
     
-    if (this.onAudioEndCallback) {
-      clientLogger.info('Executing callback despite audio error');
-      setTimeout(() => {
-        this.executeCallback(this.onAudioEndCallback);
-        this.onAudioEndCallback = null;
-      }, 500);
+    if (this.retryCount < this.maxRetries) {
+      this.retryCount++;
+      clientLogger.warn(`Retry ${this.retryCount} untuk audio tim ${team}`);
+      setTimeout(() => this.putarAudio(team, onAudioEnd), 500);
+    } else {
+      if (onAudioEnd) {
+        setTimeout(() => {
+          this.executeCallback(onAudioEnd);
+        }, 500);
+      }
     }
   }
 
@@ -154,7 +176,7 @@ class SistemAudioTim {
         return r.json();
       })
       .then(data => {
-        clientLogger.info('Audio finish callback successful', data);
+        clientLogger.success('Audio finish callback successful', data);
       })
       .catch(err => {
         clientLogger.error('Audio finish callback error:', err);
@@ -167,10 +189,10 @@ class SistemAudioTim {
     fetch(`/update?team=${team}&add=0&first=1`)
       .then(r => {
         if (r.ok) {
-          clientLogger.info('Fallback timer start successful');
+          clientLogger.success('Fallback timer start successful');
         }
       })
-      .catch(e => clientLogger.error('Fallback also failed:', e));
+      .catch(e => clientLogger.error('Fallback juga gagal:', e));
   }
 
   berhenti() {
@@ -179,11 +201,12 @@ class SistemAudioTim {
       this.audioSekarang.currentTime = 0;
       this.sedangMemutar = false;
       this.onAudioEndCallback = null;
+      this.retryCount = 0;
     }
   }
 }
 
-// Sistem Audio untuk Timer Countdown
+// IMPROVED: Sistem Audio untuk Timer Countdown
 class TimerAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -203,10 +226,13 @@ class TimerAudioSystem {
     countdownFiles.forEach(file => {
       const audioEl = new Audio(`/audio/${file}`);
       audioEl.preload = 'auto';
+      audioEl.onerror = (e) => {
+        clientLogger.error(`Error audio timer ${file}:`, e.target.error);
+      };
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.info('Sistem audio timer countdown diinisialisasi');
+    clientLogger.success('Sistem audio timer countdown diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -225,16 +251,23 @@ class TimerAudioSystem {
       this.audioSekarang = audioEl;
 
       audioEl.currentTime = 0;
-      audioEl.play().then(() => {
-        clientLogger.info(`Memutar audio timer: ${audioFile}`);
-      }).catch(error => {
-        clientLogger.error('Gagal memutar audio timer:', error);
-        this.sedangMemutar = false;
-      });
+      
+      const playPromise = audioEl.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            clientLogger.success(`Memutar audio timer: ${audioFile}`);
+          })
+          .catch(error => {
+            clientLogger.error('Gagal memutar audio timer:', error);
+            this.sedangMemutar = false;
+          });
+      }
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.info('Audio timer selesai');
+        clientLogger.success('Audio timer selesai');
         
         if (audioFile === 'waktu habis.mp3') {
           fetch(`/audioFinished?action=timerEnd&type=timer`)
@@ -260,7 +293,7 @@ class TimerAudioSystem {
   }
 }
 
-// Sistem Audio untuk Juri
+// IMPROVED: Sistem Audio untuk Juri
 class JuryAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -278,10 +311,13 @@ class JuryAudioSystem {
     juryFiles.forEach(file => {
       const audioEl = new Audio(`/audio/${file}`);
       audioEl.preload = 'auto';
+      audioEl.onerror = (e) => {
+        clientLogger.error(`Error audio juri ${file}:`, e.target.error);
+      };
       this.audioElements.set(file, audioEl);
     });
     
-    clientLogger.info('Sistem audio juri diinisialisasi');
+    clientLogger.success('Sistem audio juri diinisialisasi');
   }
 
   putarAudio(audioFile) {
@@ -300,16 +336,23 @@ class JuryAudioSystem {
       this.audioSekarang = audioEl;
 
       audioEl.currentTime = 0;
-      audioEl.play().then(() => {
-        clientLogger.info(`Memutar audio juri: ${audioFile}`);
-      }).catch(error => {
-        clientLogger.error('Gagal memutar audio juri:', error);
-        this.sedangMemutar = false;
-      });
+      
+      const playPromise = audioEl.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            clientLogger.success(`Memutar audio juri: ${audioFile}`);
+          })
+          .catch(error => {
+            clientLogger.error('Gagal memutar audio juri:', error);
+            this.sedangMemutar = false;
+          });
+      }
 
       audioEl.onended = () => {
         this.sedangMemutar = false;
-        clientLogger.info('Audio juri selesai');
+        clientLogger.success('Audio juri selesai');
       };
 
       return true;
@@ -335,10 +378,13 @@ const audioTim = new SistemAudioTim();
 const timerAudio = new TimerAudioSystem();
 const juryAudio = new JuryAudioSystem();
 
-// TIMER FUNCTIONS
+// IMPROVED: TIMER FUNCTIONS dengan better error handling
 function updateTimerDisplay(seconds) {
     const timerEl = document.querySelector('.timer');
-    if (!timerEl) return;
+    if (!timerEl) {
+      clientLogger.error('Timer element not found');
+      return;
+    }
     
     const minutes = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -360,11 +406,18 @@ function resetTimerDisplay() {
         timerEl.textContent = '00:00';
         timerEl.classList.remove('warning', 'critical');
         clientLogger.info(`Timer display reset to 00:00`);
+    } else {
+        clientLogger.error('Timer element not found for reset');
     }
 }
 
-// fungsi tampilkan tim aktif
+// IMPROVED: fungsi tampilkan tim aktif dengan validation
 function showActiveTeam(team) {
+    if (!team || team < 1 || team > TEAM_COUNT) {
+        clientLogger.error('Invalid team for showActiveTeam:', team);
+        return;
+    }
+    
     clientLogger.info(`Showing active team`, { team, teamLetter: getTeamLetter(team) });
     
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -383,7 +436,7 @@ function showActiveTeam(team) {
         activeEl.classList.add("active");
     }
     
-    clientLogger.info(`Team display updated`, { activeTeam: team, activeTeamLetter: getTeamLetter(team) });
+    clientLogger.success(`Team display updated`, { activeTeam: team, activeTeamLetter: getTeamLetter(team) });
 }
 
 // Fungsi reset tampilan
@@ -401,9 +454,11 @@ function getTeamLetter(index) {
     return String.fromCharCode(65 + index - 1);
 }
 
-// Update tampilan berdasarkan status toggle tim
+// IMPROVED: Update tampilan berdasarkan status toggle tim dengan better handling
 function updateTeamDisplay() {
     clientLogger.info('Updating team display based on toggle state', { teamToggleState });
+    
+    let visibleCount = 0;
     
     for (let i = 1; i <= TEAM_COUNT; i++) {
         const el = document.getElementById("team-" + i);
@@ -413,6 +468,7 @@ function updateTeamDisplay() {
                 el.style.visibility = "visible";
                 el.style.opacity = "1";
                 el.style.pointerEvents = "auto";
+                visibleCount++;
             } else {
                 el.style.display = "none";
                 el.style.visibility = "hidden";
@@ -425,45 +481,53 @@ function updateTeamDisplay() {
         }
     }
     
-    setTimeout(() => {
-        const grid = document.querySelector('.grid');
-        if (grid) {
+    // Update grid layout based on visible teams
+    const grid = document.querySelector('.grid');
+    if (grid) {
+        grid.setAttribute('data-visible-teams', visibleCount);
+        
+        // Force reflow untuk memastikan CSS update
+        setTimeout(() => {
             grid.style.display = 'none';
             setTimeout(() => {
                 grid.style.display = 'grid';
             }, 10);
-        }
-    }, 50);
+        }, 50);
+    }
     
-    clientLogger.info('Team display update completed');
+    clientLogger.success(`Team display update completed - ${visibleCount} teams visible`);
 }
 
-// Render tim di papan dengan memperhitungkan status toggle
+// IMPROVED: Render tim di papan dengan better error handling
 function renderInitial() {
-    board.innerHTML = "";
-    for (let i = 1; i <= TEAM_COUNT; i++) {
-        const el = document.createElement("div");
-        el.className = "team";
-        el.id = "team-" + i;
-        el.innerHTML = `
-            <h2>Tim ${getTeamLetter(i)}</h2>
-            <div class="score" id="score-${i}">0</div>
-        `;
+    try {
+        board.innerHTML = "";
+        for (let i = 1; i <= TEAM_COUNT; i++) {
+            const el = document.createElement("div");
+            el.className = "team";
+            el.id = "team-" + i;
+            el.innerHTML = `
+                <h2>Tim ${getTeamLetter(i)}</h2>
+                <div class="score" id="score-${i}">0</div>
+            `;
+            
+            board.appendChild(el);
+        }
+        clientLogger.success(`Initial teams rendered`, { teamCount: TEAM_COUNT });
         
-        board.appendChild(el);
+        setTimeout(() => {
+            updateTeamDisplay();
+        }, 100);
+    } catch (error) {
+        clientLogger.error('Error rendering initial teams:', error);
     }
-    clientLogger.info(`Initial teams rendered`, { teamCount: TEAM_COUNT });
-    
-    setTimeout(() => {
-        updateTeamDisplay();
-    }, 100);
 }
 
 renderInitial();
 
-// Socket event handlers
+// IMPROVED: Socket event handlers dengan better error handling
 socket.on("connect", () => {
-    clientLogger.info('Connected to server');
+    clientLogger.success('Connected to server');
     
     const liveIndicator = document.querySelector('.live-indicator');
     if (liveIndicator) {
@@ -471,27 +535,46 @@ socket.on("connect", () => {
         liveIndicator.textContent = '● LIVE - Terhubung ke Server';
     }
     
+    // Load initial data dengan error handling
     Promise.all([
-        fetch('/scores').then(r => r.json()),
-        fetch('/lockstate').then(r => r.json()),
-        fetch('/teamToggleState').then(r => r.json())
+        fetch('/scores').then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        }),
+        fetch('/lockstate').then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        }),
+        fetch('/teamToggleState').then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
     ])
     .then(([scoresData, lockStateData, toggleStateData]) => {
-        clientLogger.info('Initial scores loaded', { scores: scoresData });
-        for (let i = 0; i < scoresData.length; i++) {
-            const el = document.getElementById("score-" + (i + 1));
-            if (el) el.textContent = scoresData[i];
+        clientLogger.success('Initial data loaded successfully');
+        
+        // Update scores
+        if (Array.isArray(scoresData)) {
+            for (let i = 0; i < scoresData.length; i++) {
+                const el = document.getElementById("score-" + (i + 1));
+                if (el) el.textContent = scoresData[i];
+            }
+            clientLogger.info('Initial scores loaded', { scores: scoresData });
         }
         
-        clientLogger.info('Initial lock state loaded', { lockState: lockStateData });
-        if (lockStateData.locked && lockStateData.activeTeam) {
-            showActiveTeam(lockStateData.activeTeam);
+        // Update lock state
+        if (lockStateData && typeof lockStateData === 'object') {
+            if (lockStateData.locked && lockStateData.activeTeam) {
+                showActiveTeam(lockStateData.activeTeam);
+            }
+            clientLogger.info('Initial lock state loaded', { lockState: lockStateData });
         }
         
-        clientLogger.info('Initial team toggle state loaded', { teamToggleState: toggleStateData });
+        // Update team toggle state
         if (Array.isArray(toggleStateData) && toggleStateData.length === TEAM_COUNT) {
             teamToggleState = toggleStateData;
             updateTeamDisplay();
+            clientLogger.info('Initial team toggle state loaded', { teamToggleState });
         }
     })
     .catch(err => {
@@ -508,21 +591,23 @@ socket.on("disconnect", () => {
     }
 });
 
-// Update skor realtime
+// IMPROVED: Update skor realtime dengan animation
 socket.on("update", payload => {
-    clientLogger.info('update', payload);
+    clientLogger.info('Score update received', payload);
     const { team, score } = payload;
     const el = document.getElementById("score-" + team);
     if (el) {
         el.textContent = score;
         el.classList.add('score-update');
         setTimeout(() => el.classList.remove('score-update'), 600);
+    } else {
+        clientLogger.warn('Score element not found for team:', team);
     }
 });
 
 // Reset semua skor
 socket.on("reset", arr => {
-    clientLogger.info('reset', { scores: arr });
+    clientLogger.info('Reset scores', { scores: arr });
     if (Array.isArray(arr)) {
         arr.forEach((s, idx) => {
             const el = document.getElementById("score-" + (idx + 1));
@@ -538,7 +623,7 @@ socket.on("reset", arr => {
 
 // Status kunci tim
 socket.on("lockstate", state => {
-    clientLogger.info('lockstate', state);
+    clientLogger.info('Lock state update', state);
     if (!state.locked) {
         resetDisplay();
     } else if (state.activeTeam) {
@@ -546,9 +631,9 @@ socket.on("lockstate", state => {
     }
 });
 
-// Event untuk update status toggle tim individual
+// IMPROVED: Event untuk update status toggle tim individual
 socket.on("teamToggleUpdate", data => {
-    clientLogger.info('teamToggleUpdate', data);
+    clientLogger.info('Team toggle update received', data);
     const { team, enabled } = data;
     
     if (team >= 1 && team <= TEAM_COUNT) {
@@ -567,7 +652,7 @@ socket.on("teamToggleUpdate", data => {
 
 // Event untuk enable semua tim
 socket.on("allTeamsEnabled", () => {
-    clientLogger.info('allTeamsEnabled');
+    clientLogger.info('All teams enabled received');
     teamToggleState = Array(TEAM_COUNT).fill(true);
     clientLogger.info('All teams enabled', { teamToggleState });
     updateTeamDisplay();
@@ -575,7 +660,7 @@ socket.on("allTeamsEnabled", () => {
 
 // Event untuk disable semua tim
 socket.on("allTeamsDisabled", () => {
-    clientLogger.info('allTeamsDisabled');
+    clientLogger.info('All teams disabled received');
     teamToggleState = Array(TEAM_COUNT).fill(false);
     clientLogger.info('All teams disabled', { teamToggleState });
     updateTeamDisplay();
@@ -583,7 +668,7 @@ socket.on("allTeamsDisabled", () => {
 
 // Event untuk initial team toggle state
 socket.on("teamToggleState", data => {
-    clientLogger.info('teamToggleState', data);
+    clientLogger.info('Team toggle state received', data);
     if (Array.isArray(data) && data.length === TEAM_COUNT) {
         teamToggleState = data;
         clientLogger.info('Team toggle state received from server', { teamToggleState });
@@ -595,14 +680,13 @@ socket.on("teamToggleState", data => {
 
 // Suara tombol buzzer
 socket.on("buzz", ({ team }) => {
-    clientLogger.info('buzz', { team, teamLetter: getTeamLetter(team) });
-    
+    clientLogger.info('Buzzer pressed', { team, teamLetter: getTeamLetter(team) });
     showActiveTeam(team);
 });
 
-// HANDLER AUDIO
+// IMPROVED: HANDLER AUDIO dengan better error handling
 socket.on("playTeamAudio", (data) => {
-    clientLogger.info('playTeamAudio', data);
+    clientLogger.info('Play team audio received', data);
     const { team, audioFile, timerDuration } = data;
 
     clientLogger.info(`Memulai audio untuk Tim ${getTeamLetter(team)}: ${audioFile}`);
@@ -623,15 +707,15 @@ socket.on("playTeamAudio", (data) => {
 });
 
 socket.on("playTimerAudio", (data) => {
-    clientLogger.info('playTimerAudio', data);
+    clientLogger.info('Play timer audio received', data);
     const { seconds, audioFile } = data;
     
     timerAudio.putarAudio(audioFile);
 });
 
-// HANDLER AUDIO JURI
+// IMPROVED: HANDLER AUDIO JURI dengan better feedback
 socket.on("playJuryAudio", (data) => {
-    clientLogger.info('playJuryAudio', data);
+    clientLogger.info('Play jury audio received', data);
     const { isCorrect, audioFile } = data;
 
     clientLogger.info(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
@@ -640,21 +724,25 @@ socket.on("playJuryAudio", (data) => {
     
     const aiMessageEl = document.getElementById("aiMessage");
     if (aiMessageEl) {
-        const message = isCorrect ? 'JAWABAN BENAR!' : 'JAWABAN SALAH!';
+        const message = isCorrect ? 'JAWABAN BENAR! 🎉' : 'JAWABAN SALAH! ❌';
         aiMessageEl.textContent = message;
         aiMessageEl.classList.add("show");
         
+        // Add specific class for correct/wrong
+        aiMessageEl.classList.remove("correct", "wrong");
+        aiMessageEl.classList.add(isCorrect ? "correct" : "wrong");
+        
         setTimeout(() => {
-            aiMessageEl.classList.remove("show");
+            aiMessageEl.classList.remove("show", "correct", "wrong");
         }, 3000);
     }
 });
 
-// Pesan AI tanpa TTS
+// IMPROVED: Pesan AI dengan better styling
 let aiMessageTimeout;
 
 socket.on("aiMessage", (data) => {
-    clientLogger.info('aiMessage', data);
+    clientLogger.info('AI message received', data);
     const aiMessageEl = document.getElementById("aiMessage");
     const message = data.message;
 
@@ -670,6 +758,9 @@ socket.on("aiMessage", (data) => {
 
     aiMessageEl.textContent = message;
     aiMessageEl.classList.add("show");
+    
+    // Remove any previous styling
+    aiMessageEl.classList.remove("correct", "wrong");
 
     clientLogger.info('AI Message displayed', { message });
     
@@ -679,34 +770,51 @@ socket.on("aiMessage", (data) => {
     }, 4000);
 });
 
-// TIMER EVENTS FROM SERVER
+// IMPROVED: TIMER EVENTS FROM SERVER dengan validation
 socket.on("timerStart", (data) => {
-    clientLogger.info('timerStart', data);
+    clientLogger.info('Timer start received', data);
     if (data.duration) {
         updateTimerDisplay(data.duration);
         clientLogger.info('Timer started');
+    } else {
+        clientLogger.warn('Timer start received without duration');
     }
 });
 
 socket.on("timerUpdate", (data) => {
-    clientLogger.info('timerUpdate', data);
     if (data.timeRemaining !== undefined) {
         updateTimerDisplay(data.timeRemaining);
+    } else {
+        clientLogger.warn('Timer update received without timeRemaining');
     }
 });
 
 socket.on("timerEnd", () => {
-    clientLogger.info('timerEnd');
+    clientLogger.info('Timer end received');
     updateTimerDisplay(0);
 });
 
 socket.on("timerReset", () => {
-    clientLogger.info('timerReset');
+    clientLogger.info('Timer reset received');
     resetTimerDisplay();
 });
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
-    clientLogger.info('Display initialized - IMPROVED Audio System + Timer Sync + Jury Audio + Team Toggle');
+    clientLogger.success('Display initialized - ENHANCED Audio System + Timer Sync + Jury Audio + Team Toggle');
+    
+    // Add CSS for AI message types
+    const style = document.createElement('style');
+    style.textContent = `
+        .ai-message.correct {
+            background: linear-gradient(135deg, #4caf50, #45a049);
+            border-color: #2e7d32;
+        }
+        .ai-message.wrong {
+            background: linear-gradient(135deg, #f44336, #d32f2f);
+            border-color: #b71c1c;
+        }
+    `;
+    document.head.appendChild(style);
 });
