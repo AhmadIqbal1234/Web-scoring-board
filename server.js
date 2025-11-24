@@ -29,7 +29,7 @@ let teamToggleState = Array(TEAM_COUNT).fill(true);
 let timerInterval = null;
 let timeRemaining = 0;
 let isTimerRunning = false;
-let isAudioPlaying = false; // NEW: Flag untuk sync audio
+let isAudioPlaying = false;
 let audioFinishTimeout = null;
 
 // IMPROVED: ESP32 Status dengan heartbeat
@@ -41,7 +41,7 @@ let esp32HeartbeatInterval = null;
 
 // IMPROVED: Request tracking untuk prevent spam
 let recentRequests = new Map();
-const REQUEST_WINDOW_MS = 1000; // 1 second window
+const REQUEST_WINDOW_MS = 1000;
 const MAX_REQUESTS_PER_WINDOW = 3;
 
 const logger = {
@@ -132,7 +132,7 @@ function getTeamLetter(teamNumber) {
   return String.fromCharCode(64 + teamNumber);
 }
 
-// IMPROVED: Generate feedback messages dengan variasi lebih banyak
+// IMPROVED: Generate feedback messages
 function generateFeedbackMessage(team, isCorrect, points) {
   const teamLetter = getTeamLetter(team);
   
@@ -142,9 +142,7 @@ function generateFeedbackMessage(team, isCorrect, points) {
       `Hebat! Jawaban tepat dari Tim ${teamLetter}! Tambah ${points} poin!`,
       `Benar! Poin ${points} untuk Tim ${teamLetter}!`,
       `Mantap! Tim ${teamLetter} dapat ${points} poin!`,
-      `Yes! Tim ${teamLetter} benar! ${points} poin!`,
-      `Luar biasa! Tim ${teamLetter} +${points} poin!`,
-      `Tepat sekali! Tim ${teamLetter} dapat ${points} poin!`
+      `Yes! Tim ${teamLetter} benar! ${points} poin!`
     ];
     return messages[Math.floor(Math.random() * messages.length)];
   } else {
@@ -153,9 +151,7 @@ function generateFeedbackMessage(team, isCorrect, points) {
       `Masih salah, Tim ${teamLetter}. ${points} poin!`,
       `Bukan itu jawabannya, Tim ${teamLetter}. ${points} poin!`,
       `Coba lagi, Tim ${teamLetter}. ${points} poin!`,
-      `Oops, salah Tim ${teamLetter}. ${points} poin!`,
-      `Jawaban belum tepat, Tim ${teamLetter}. ${points} poin!`,
-      `Sedikit meleset, Tim ${teamLetter}. ${points} poin!`
+      `Oops, salah Tim ${teamLetter}. ${points} poin!`
     ];
     return messages[Math.floor(Math.random() * messages.length)];
   }
@@ -195,7 +191,6 @@ function validateAudioFiles() {
   ];
   
   logger.info("Validating audio files...");
-  logger.info(`Audio directory: ${audioDirFound}`);
   
   let missingFiles = [];
   let foundFiles = [];
@@ -204,25 +199,14 @@ function validateAudioFiles() {
     const filePath = join(audioDirFound, file);
     if (fs.existsSync(filePath)) {
       foundFiles.push(file);
-      logger.info(`Audio file found: ${file}`);
     } else {
       missingFiles.push(file);
-      logger.error(`Audio file missing: ${file}`);
     }
   });
   
   logger.info(`Audio validation result: ${foundFiles.length}/${requiredFiles.length} files found`);
   if (missingFiles.length > 0) {
     logger.error(`Missing files: ${missingFiles.join(', ')}`);
-    
-    if (!isProduction) {
-      logger.info('Creating placeholder audio files for development...');
-      missingFiles.forEach(file => {
-        const placeholderPath = join(audioDirFound, file);
-        fs.writeFileSync(placeholderPath, '');
-        logger.info(`Created placeholder: ${file}`);
-      });
-    }
   }
   
   return audioDirFound;
@@ -291,7 +275,7 @@ function resetTimer() {
   }
   
   isTimerRunning = false;
-  isAudioPlaying = false; // Reset audio flag
+  isAudioPlaying = false;
   timeRemaining = 0;
   io.emit("timerReset");
   
@@ -302,7 +286,6 @@ function resetTimer() {
 function startTimerAfterAudio(team) {
   logger.info("Starting timer after audio finished", { team });
   
-  // Clear existing timeout
   if (audioFinishTimeout) {
     clearTimeout(audioFinishTimeout);
   }
@@ -314,8 +297,6 @@ function startTimerAfterAudio(team) {
     if (!isTimerRunning) {
       logger.info("SAFETY TIMEOUT: Starting timer after audio timeout", { team });
       startTimer(team);
-    } else {
-      logger.info("Timer already running, ignoring safety start");
     }
   }, 5000);
 }
@@ -329,19 +310,18 @@ function updateESP32Status(connected, socket = null, ip = null) {
     esp32SocketId = socket.id;
     esp32LastIP = ip;
     
-    // Setup heartbeat monitoring
     if (esp32HeartbeatInterval) {
       clearInterval(esp32HeartbeatInterval);
     }
     
     esp32HeartbeatInterval = setInterval(() => {
       const timeSinceLastActivity = new Date() - lastEsp32Activity;
-      if (timeSinceLastActivity > 120000) { // 2 minutes without activity
+      if (timeSinceLastActivity > 120000) {
         logger.warn("ESP32 heartbeat timeout - marking as disconnected");
         updateESP32Status(false);
         clearInterval(esp32HeartbeatInterval);
       }
-    }, 30000); // Check every 30 seconds
+    }, 30000);
     
     logger.info("ESP32 Controller Connected", {
       socketId: socket.id,
@@ -382,56 +362,16 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// IMPROVED: Smart rate limiting
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: (req) => {
-    let clientIP = req.ip || 
-                  req.connection.remoteAddress || 
-                  req.socket.remoteAddress ||
-                  (req.connection.socket ? req.connection.socket.remoteAddress : null);
-    
-    if (!isProduction) {
-      console.log(`[RATE LIMIT] Client IP: ${clientIP}, URL: ${req.url}`);
-    }
-    
-    const whitelistIPs = [
-      '192.168.1.',
-      '127.0.0.1',
-      '::1',
-      '::ffff:127.0.0.1',
-      '::ffff:192.168.1.',
-      '172.',
-      '10.'
-    ];
-    
-    const whitelistURLs = [
-      '/health',
-      '/esp32checkin', 
-      '/esp32status',
-      '/config',
-      '/lockstate',
-      '/update'
-    ];
-    
-    const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
-    const isWhitelistedURL = whitelistURLs.some(url => req.url.startsWith(url));
-    
-    if (isWhitelistedIP || isWhitelistedURL) {
-      return 10000;
-    }
-    
-    return isProduction ? 100 : 1000;
-  },
+  max: 1000,
   message: {
     error: 'Terlalu banyak request',
     message: 'Silakan coba lagi setelah 15 menit'
   },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req, res) => {
-    return res.statusCode < 400;
-  }
 });
 
 app.use(limiter);
@@ -502,12 +442,11 @@ app.get("/", (req, res) => {
     status: "Quiz Scoring System API", 
     version: "2.1.0",
     environment: isProduction ? "production" : "development",
-    rateLimiting: "Smart limits enabled",
     ready: true
   });
 });
 
-// IMPROVED: ROUTES UNTUK TEAM TOGGLE dengan better validation
+// IMPROVED: ROUTES UNTUK TEAM TOGGLE
 app.get("/toggleTeam", (req, res) => {
   const team = parseInt(req.query.team);
   const enabled = req.query.enabled === 'true';
@@ -569,41 +508,57 @@ app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
 });
 
-// IMPROVED: Main update endpoint dengan better error handling dan rate limiting
+// IMPROVED: Main update endpoint dengan DEBUG DETAILED
 app.get("/update", async (req, res) => {
   try {
+    console.log('=== 🎯 DEBUG UPDATE ENDPOINT ===');
+    console.log('📋 Query parameters:', req.query);
+    console.log('🌐 Client IP:', req.ip);
+    
     if (!req.query.team) {
-      logger.error('Missing team parameter');
+      console.log('❌ Missing team parameter');
+      logger.error('Missing team parameter - Full query:', req.query);
       return res.status(400).json({ error: "Parameter team diperlukan" });
     }
 
     const team = parseInt(req.query.team);
     const clientIP = req.ip || req.connection.remoteAddress;
     
-    // IMPROVED: Rate limiting per team
-    if (isRateLimited(`team_${team}_${clientIP}`)) {
-      logger.warn('Rate limit exceeded for team', { team, ip: clientIP });
-      return res.status(429).json({ error: "Terlalu banyak request, coba lagi sebentar" });
-    }
+    console.log('🔢 Parsed team:', team, 'Type:', typeof team);
+    console.log('📊 Team toggle state:', teamToggleState);
     
     if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-      logger.error('Invalid team', { team });
+      console.log('❌ Invalid team number');
+      logger.error('Invalid team', { 
+        team, 
+        parsedTeam: team,
+        queryTeam: req.query.team
+      });
       return res.status(400).json({ error: "Tim tidak valid" });
     }
     
+    console.log('✅ Team validation passed');
+    console.log('🔘 Team enabled check:', teamToggleState[team - 1]);
+    
     if (!teamToggleState[team - 1]) {
-      logger.error('Team is disabled', { team });
+      console.log('❌ Team is disabled');
+      logger.error('Team is disabled', { 
+        team, 
+        teamLetter: getTeamLetter(team)
+      });
       return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
     }
     
     const add = parseInt(req.query.add) || 0;
     const isFirst = req.query.first === "1";
 
-    logger.info('/update called', { team, add, isFirst, ip: clientIP });
+    console.log('🔄 Processing - team:', team, 'add:', add, 'isFirst:', isFirst);
+    console.log('🔒 Current lockState:', lockState);
 
     // Track ESP32 activity
     if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
       lastEsp32Activity = new Date();
+      console.log('📡 ESP32 Activity detected');
       logger.info("ESP32 Activity", {
         type: "buzzer",
         team: team,
@@ -612,20 +567,34 @@ app.get("/update", async (req, res) => {
         ip: clientIP,
         timestamp: lastEsp32Activity.toISOString()
       });
+      
+      updateESP32Status(true, null, clientIP);
     }
 
+    console.log('🔓 Lock state check - locked:', lockState.locked, 'activeTeam:', lockState.activeTeam);
+    
     if (lockState.locked && team !== lockState.activeTeam) {
-      logger.error('Team locked', { team, activeTeam: lockState.activeTeam });
+      console.log('❌ Team locked - cannot process');
+      logger.error('Team locked', { 
+        team, 
+        activeTeam: lockState.activeTeam
+      });
       return res.status(403).json({ error: "Tombol terkunci" });
     }
 
     if (isFirst && !lockState.locked) {
+      console.log('🎮 FIRST PRESS - Activating team:', team);
       lockState = { locked: true, activeTeam: team };
+      
+      console.log('📢 Emitting lockstate:', lockState);
       io.emit("lockstate", lockState);
+      
+      console.log('📢 Emitting buzz for team:', team);
       io.emit("buzz", { team });
       
       const audioFile = `Tim ${getTeamLetter(team)}.mp3`;
       
+      console.log('🎵 Emitting playTeamAudio for team:', team);
       io.emit("playTeamAudio", {
         team: team,
         audioFile: audioFile,
@@ -638,12 +607,16 @@ app.get("/update", async (req, res) => {
     }
 
     if (add !== 0) {
+      console.log('➕ Adding score:', add, 'to team:', team);
       scores[team - 1] += add;
+      
+      console.log('📢 Emitting score update for team:', team);
       io.emit("update", { team, score: scores[team - 1] });
       
       timerAudio.playJuryAudio(add > 0);
       
       const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
+      console.log('📢 Emitting AI message:', feedbackMessage);
       io.emit("aiMessage", {
         message: feedbackMessage,
         shouldSpeak: false
@@ -656,24 +629,25 @@ app.get("/update", async (req, res) => {
       io.emit("lockstate", lockState);
     }
 
+    console.log('✅ UPDATE SUCCESS - Sending response');
     res.json({ success: true, message: "OK", team, add, isFirst });
     
   } catch (error) {
+    console.log('❌ UPDATE ERROR:', error);
     logger.error('Error in /update endpoint:', error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// IMPROVED: Audio finished callback dengan better state management
+// IMPROVED: Audio finished callback
 app.get("/audioFinished", (req, res) => {
   try {
     const action = req.query.action;
     const team = parseInt(req.query.team);
     const audioType = req.query.type || 'team';
     
-    logger.info("Audio finished callback received", { action, team, audioType });
+    console.log('🎵 Audio finished callback:', { action, team, audioType });
     
-    // Clear safety timeout
     if (audioFinishTimeout) {
       clearTimeout(audioFinishTimeout);
       audioFinishTimeout = null;
@@ -683,10 +657,10 @@ app.get("/audioFinished", (req, res) => {
     
     if (action === "startTimer" && team && audioType === 'team') {
       if (!isTimerRunning) {
-        logger.info("Starting timer AFTER team audio finished", { team });
+        console.log('⏰ Starting timer after audio finished for team:', team);
         startTimer(team);
       } else {
-        logger.info("Timer already running, cannot start again");
+        console.log('⏰ Timer already running');
       }
     }
     
@@ -696,6 +670,7 @@ app.get("/audioFinished", (req, res) => {
       timerStarted: isTimerRunning
     });
   } catch (error) {
+    console.log('❌ Audio finished error:', error);
     logger.error('Error in /audioFinished:', error);
     res.status(500).json({ error: "Processing failed" });
   }
@@ -824,6 +799,11 @@ app.get("/esp32checkin", (req, res) => {
   });
 });
 
+// TEST ROUTE untuk manual testing
+app.get("/test", (req, res) => {
+  res.sendFile(join(publicDirFound, 'test.html'));
+});
+
 // 404 Handler
 app.use((req, res) => {
   res.status(404).json({ error: "Route not found" });
@@ -843,7 +823,7 @@ io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
   
-  logger.info("Client connected", { 
+  console.log('🔌 New client connected:', {
     socketId: socket.id,
     clientType: clientType,
     ip: clientIP
@@ -851,10 +831,7 @@ io.on("connection", (socket) => {
 
   if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
     updateESP32Status(true, socket, clientIP);
-    logger.info("ESP32 Controller detected via Socket.IO", {
-      socketId: socket.id,
-      ip: clientIP
-    });
+    console.log('📡 ESP32 Controller detected via Socket.IO');
   }
 
   // Send initial state
@@ -867,12 +844,18 @@ io.on("connection", (socket) => {
     socket.emit("timerStart", { duration: timeRemaining });
   }
 
+  // Test ping-pong
+  socket.on("ping", (data) => {
+    console.log('🏓 Ping received from client:', socket.id);
+    socket.emit("pong", { ...data, serverTime: Date.now() });
+  });
+
   socket.on("toggleTeam", (data) => {
     try {
       const { teamId, enabled } = data;
       if (teamId >= 1 && teamId <= TEAM_COUNT) {
         teamToggleState[teamId - 1] = enabled;
-        logger.info("Team toggle from admin", { teamId, enabled });
+        console.log('🔘 Team toggle from admin:', { teamId, enabled });
         
         io.emit("teamToggleUpdate", {
           team: teamId,
@@ -880,13 +863,13 @@ io.on("connection", (socket) => {
         });
       }
     } catch (error) {
-      logger.error('Error in toggleTeam socket event:', error);
+      console.log('❌ Error in toggleTeam socket event:', error);
     }
   });
 
   socket.on("enableAllTeams", () => {
     teamToggleState = Array(TEAM_COUNT).fill(true);
-    logger.info("Enable all teams from admin");
+    console.log('🔘 Enable all teams from admin');
     
     io.emit("allTeamsEnabled");
   });
@@ -896,7 +879,7 @@ io.on("connection", (socket) => {
       updateESP32Status(false);
     }
     
-    logger.info("Client disconnected", { 
+    console.log('🔌 Client disconnected:', {
       socketId: socket.id, 
       reason: reason,
       clientType: clientType
@@ -909,7 +892,7 @@ async function startServer() {
   validateAudioFiles();
   
   http.listen(PORT, async () => {
-    console.log('\nSISTEM KUIS - Ridwan and Team');
+    console.log('\nSISTEM KUIS - PLAYER BUTTONS FIXED');
     console.log('───────────────────────────────────────────────────────');
     console.log(`Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     console.log(`Port: ${PORT}`);
