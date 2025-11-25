@@ -16,74 +16,6 @@
   --admin-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
 
-/* SweetAlert Custom Styling */
-.sweetalert-custom {
-  background: linear-gradient(145deg, var(--admin-bg-card), var(--admin-bg-hover)) !important;
-  color: var(--admin-text-primary) !important;
-  border: 2px solid var(--admin-border) !important;
-  border-radius: 15px !important;
-}
-
-.sweetalert-custom .swal2-title {
-  color: var(--admin-primary) !important;
-  font-weight: 800 !important;
-}
-
-.sweetalert-custom .swal2-content {
-  color: var(--admin-text-secondary) !important;
-}
-
-.sweetalert-custom .swal2-actions {
-  gap: 1rem !important;
-}
-
-/* Lightweight button styles untuk SweetAlert */
-.btn {
-  display: inline-block;
-  font-weight: 600;
-  text-align: center;
-  vertical-align: middle;
-  user-select: none;
-  border: 1px solid transparent;
-  padding: 0.6rem 1.5rem;
-  font-size: 1rem;
-  line-height: 1.5;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.btn-success {
-  background: linear-gradient(145deg, var(--admin-success), #008800);
-  color: white;
-  border: none;
-}
-
-.btn-success:hover {
-  background: linear-gradient(145deg, #008800, #006600);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 170, 0, 0.3);
-}
-
-.btn-danger {
-  background: linear-gradient(145deg, var(--admin-danger), #cc0000);
-  color: white;
-  border: none;
-}
-
-.btn-danger:hover {
-  background: linear-gradient(145deg, #cc0000, #aa0000);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(255, 68, 68, 0.3);
-}
-
-.btn:focus {
-  outline: none;
-  box-shadow: 0 0 0 4px rgba(255, 215, 0, 0.3);
-}
-
 .admin-page {
   margin: 0;
   padding: 0;
@@ -410,12 +342,12 @@
 
 /* ===== TOGGLE SECTION SPACING ===== */
 .toggle-section {
-  margin-bottom: 3rem !important;
+  margin-bottom: 3rem !important; /* Tambahkan jarak lebih besar di bawah toggle */
 }
 
 .jury-section {
   text-align: center;
-  padding-bottom: 2rem;
+  padding-bottom: 2rem; /* Tambahkan padding di bawah */
 }
 
 .jury-status {
@@ -454,13 +386,13 @@
   justify-content: center;
   gap: 2rem;
   margin-top: 1.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 1rem; /* Tambahkan margin bawah */
   flex-wrap: wrap;
 }
 
 .jury-controls.active {
   display: flex;
-  animation: fadeInUp 0.5s ease;
+  animation: fadeInUp 0.5s ease; /* Animasi saat muncul */
 }
 
 @keyframes fadeInUp {
@@ -474,6 +406,7 @@
   }
 }
 
+/* Pastikan tombol juri tidak disabled ketika nonaktif */
 .jury-btn {
   padding: 1.5rem 2.5rem;
   border: none;
@@ -490,10 +423,12 @@
   align-items: center;
   justify-content: center;
   gap: 1rem;
+  /* Hapus properti disabled default */
   opacity: 1 !important;
   pointer-events: auto !important;
 }
 
+/* Style untuk tombol ketika tidak ada tim aktif */
 .jury-btn:disabled {
   opacity: 0.6 !important;
   cursor: not-allowed !important;
@@ -516,8 +451,9 @@
   color: white;
 }
 
+/* Tambahkan spacing untuk section berikutnya */
 .admin-panel:not(.toggle-section) {
-  margin-top: 1rem;
+  margin-top: 1rem; /* Jarak antara toggle dan section berikutnya */
 }
 
 /* ===== 2 ROWS TEAMS LAYOUT ===== */
@@ -543,7 +479,7 @@
   transition: all 0.3s ease;
   position: relative;
   overflow: hidden;
-  min-height: 140px;
+  min-height: 140px; /* Tinggi ditambah untuk accommodate toggle */
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -661,6 +597,8 @@
   background: linear-gradient(145deg, #388e3c, #1b5e20);
 }
 
+
+/* Status badge styles */
 .team-card-compact .status-waiting {
   background: var(--admin-border);
   color: var(--admin-text-dim);
@@ -859,6 +797,41 @@ footer h5 {
 
   .admin-header {
     padding: 1rem;
+  }
+
+  /* Lightweight button styles to support Swal.mixin customClass (btn, btn-success, btn-danger)
+     This avoids requiring full Bootstrap just to style SweetAlert buttons. */
+  .btn {
+    display: inline-block;
+    font-weight: 600;
+    color: #212529;
+    text-align: center;
+    vertical-align: middle;
+    user-select: none;
+    background-color: transparent;
+    border: 1px solid transparent;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .btn-success {
+    background-color: #28a745;
+    color: #fff;
+    border-color: #28a745;
+  }
+
+  .btn-danger {
+    background-color: #dc3545;
+    color: #fff;
+    border-color: #dc3545;
+  }
+
+  .btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 4px rgba(40,167,69,0.12);
   }
 
   .admin-title {
