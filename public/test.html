@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="./tts/android-chrome-192x192.png">
+  <title>Panel Testing - Cerdas Cermat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <style>
+    /* ===== TEST PANEL STYLES ===== */
+    .test-panel {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(26, 26, 74, 0.95);
+      border: 2px solid #ffd700;
+      border-radius: 12px;
+      padding: 15px;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(10px);
+      max-width: 400px;
+      transition: all 0.3s ease;
+    }
+
+    .test-panel.collapsed {
+      width: 60px;
+      height: 60px;
+      overflow: hidden;
+      padding: 10px;
+    }
+
+    .test-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #2a2a6a;
+    }
+
+    .test-panel-title {
+      color: #ffd700;
+      font-weight: bold;
+      font-size: 1.1rem;
+    }
+
+    .test-panel-toggle {
+      background: none;
+      border: none;
+      color: #ffd700;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 5px;
+      border-radius: 4px;
+    }
+
+    .test-panel-toggle:hover {
+      background: rgba(255, 215, 0, 0.1);
+    }
+
+    .test-panel-content {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 15px;
+    }
+
+    .test-team-btn {
+      background: linear-gradient(145deg, #1a1a4a, #25255a);
+      border: 1px solid #2a2a6a;
+      border-radius: 6px;
+      color: white;
+      padding: 8px 5px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+    }
+
+    .test-team-btn:hover {
+      border-color: #ffd700;
+      transform: translateY(-2px);
+    }
+
+    .test-team-btn:active {
+      transform: translateY(0);
+    }
+
+    .test-jury-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .test-jury-btn {
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .test-jury-correct {
+      background: linear-gradient(145deg, #00aa00, #008800);
+      color: white;
+    }
+
+    .test-jury-wrong {
+      background: linear-gradient(145deg, #ff4444, #cc0000);
+      color: white;
+    }
+
+    .test-jury-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .test-jury-btn:active {
+      transform: translateY(0);
+    }
+
+    .test-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .test-control-btn {
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .test-reset {
+      background: linear-gradient(145deg, #ff6b00, #ff8c00);
+      color: white;
+    }
+
+    .test-unlock {
+      background: linear-gradient(145deg, #00d4ff, #0099cc);
+      color: white;
+    }
+
+    .test-status {
+      margin-top: 10px;
+      padding: 8px;
+      background: rgba(10, 10, 42, 0.7);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      text-align: center;
+      color: #a0a0cc;
+      min-height: 20px;
+    }
+
+    /* Responsive styles */
+    @media (max-width: 768px) {
+      .test-panel {
+        bottom: 10px;
+        right: 10px;
+        left: 10px;
+        max-width: none;
+      }
+      
+      .test-panel.collapsed {
+        width: 50px;
+        height: 50px;
+        bottom: 10px;
+        right: 10px;
+      }
+      
+      .test-panel-content {
+        grid-template-columns: repeat(6, 1fr);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .test-panel-content {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="content-wrapper">
+    <div class="header-container">
+      <div class="live-indicator"></div>
+      <div class="event-title">Cerdas Cermat</div>
+      <div class="event-subtitle">SMK N 1 Wonosegoro - PANEL TESTING</div>
+    </div>
+
+    <div class="timer-container">
+      <div class="timer">00:00</div>
+    </div>
+
+    <main>
+      <div id="overlay" class="overlay"></div>
+      <div id="board" class="grid">
+        <!-- tim card dari js/display.js akan di inject sini -->
+      </div>
+      <div id="aiMessage" class="ai-message"></div>
+    </main>
+  </div>
+
+  <!-- TEST PANEL -->
+  <div class="test-panel" id="testPanel">
+    <div class="test-panel-header">
+      <div class="test-panel-title">Panel Testing</div>
+      <button class="test-panel-toggle" id="togglePanel">−</button>
+    </div>
+    
+    <div class="test-panel-content" id="panelContent">
+      <!-- Team buttons will be added by JavaScript -->
+    </div>
+    
+    <div class="test-jury-controls">
+      <button class="test-jury-btn test-jury-correct" id="juryCorrect">BENAR</button>
+      <button class="test-jury-btn test-jury-wrong" id="juryWrong">SALAH</button>
+    </div>
+    
+    <div class="test-controls">
+      <button class="test-control-btn test-reset" id="testReset">RESET</button>
+      <button class="test-control-btn test-unlock" id="testUnlock">BUKA KUNCI</button>
+    </div>
+    
+    <div class="test-status" id="testStatus">Siap untuk testing...</div>
+  </div>
+
+  <footer>
+    <h5>Copyright © 2025 Ridwan and Team - MODE TESTING</h5>
+  </footer>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/display.js"></script>
+  <script>
+    // Panel Testing JavaScript
+    document.addEventListener('DOMContentLoaded', function() {
+      const testPanel = document.getElementById('testPanel');
+      const togglePanel = document.getElementById('togglePanel');
+      const panelContent = document.getElementById('panelContent');
+      const juryCorrect = document.getElementById('juryCorrect');
+      const juryWrong = document.getElementById('juryWrong');
+      const testReset = document.getElementById('testReset');
+      const testUnlock = document.getElementById('testUnlock');
+      const testStatus = document.getElementById('testStatus');
+      
+      let isPanelCollapsed = false;
+      let activeTeam = null;
+      
+      // Create team buttons
+      for (let i = 1; i <= 12; i++) {
+        const teamLetter = String.fromCharCode(64 + i);
+        const teamBtn = document.createElement('button');
+        teamBtn.className = 'test-team-btn';
+        teamBtn.textContent = `Tim ${teamLetter}`;
+        teamBtn.setAttribute('data-team', i);
+        
+        teamBtn.addEventListener('click', function() {
+          const team = parseInt(this.getAttribute('data-team'));
+          simulateBuzzerPress(team);
+        });
+        
+        panelContent.appendChild(teamBtn);
+      }
+      
+      // Toggle panel collapse/expand
+      togglePanel.addEventListener('click', function() {
+        isPanelCollapsed = !isPanelCollapsed;
+        testPanel.classList.toggle('collapsed', isPanelCollapsed);
+        togglePanel.textContent = isPanelCollapsed ? '+' : '−';
+        panelContent.style.display = isPanelCollapsed ? 'none' : 'grid';
+        document.querySelector('.test-jury-controls').style.display = isPanelCollapsed ? 'none' : 'grid';
+        document.querySelector('.test-controls').style.display = isPanelCollapsed ? 'none' : 'grid';
+        testStatus.style.display = isPanelCollapsed ? 'none' : 'block';
+      });
+      
+      // Jury controls
+      juryCorrect.addEventListener('click', function() {
+        if (activeTeam) {
+          simulateJuryAction(activeTeam, true);
+        } else {
+          updateStatus('Tidak ada tim aktif! Tekan tombol tim terlebih dahulu.');
+        }
+      });
+      
+      juryWrong.addEventListener('click', function() {
+        if (activeTeam) {
+          simulateJuryAction(activeTeam, false);
+        } else {
+          updateStatus('Tidak ada tim aktif! Tekan tombol tim terlebih dahulu.');
+        }
+      });
+      
+      // Reset scores
+      testReset.addEventListener('click', function() {
+        fetch('/reset')
+          .then(response => response.json())
+          .then(data => {
+            updateStatus('Semua skor telah direset!');
+          })
+          .catch(error => {
+            updateStatus('Error: Gagal mereset skor');
+            console.error('Reset error:', error);
+          });
+      });
+      
+      // Unlock system
+      testUnlock.addEventListener('click', function() {
+        fetch('/unlock')
+          .then(response => response.json())
+          .then(data => {
+            activeTeam = null;
+            updateStatus('Sistem berhasil dibuka kunci!');
+          })
+          .catch(error => {
+            updateStatus('Error: Gagal membuka kunci sistem');
+            console.error('Unlock error:', error);
+          });
+      });
+      
+      // Simulate buzzer press
+      function simulateBuzzerPress(team) {
+        updateStatus(`Mengirim buzzer untuk Tim ${String.fromCharCode(64 + team)}...`);
+        
+        fetch(`/update?team=${team}&add=0&first=1`)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              activeTeam = team;
+              updateStatus(`Tim ${String.fromCharCode(64 + team)} aktif! Gunakan tombol juri.`);
+            } else {
+              updateStatus(`Error: ${data.error || 'Gagal mengaktifkan tim'}`);
+            }
+          })
+          .catch(error => {
+            updateStatus('Error: Gagal terhubung ke server');
+            console.error('Buzzer error:', error);
+          });
+      }
+      
+      // Simulate jury action
+      function simulateJuryAction(team, isCorrect) {
+        const points = isCorrect ? 5 : -2;
+        updateStatus(`Memberi nilai ${isCorrect ? 'BENAR' : 'SALAH'} untuk Tim ${String.fromCharCode(64 + team)}...`);
+        
+        fetch(`/update?team=${team}&add=${points}`)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              updateStatus(`Berhasil! Tim ${String.fromCharCode(64 + team)} ${isCorrect ? 'dapat +5' : 'dapat -2'} poin`);
+              activeTeam = null;
+            } else {
+              updateStatus(`Error: ${data.error || 'Gagal memberi nilai'}`);
+            }
+          })
+          .catch(error => {
+            updateStatus('Error: Gagal terhubung ke server');
+            console.error('Jury action error:', error);
+          });
+      }
+      
+      // Update status message
+      function updateStatus(message) {
+        testStatus.textContent = message;
+        
+        // Auto-clear status after 5 seconds
+        setTimeout(() => {
+          if (testStatus.textContent === message) {
+            testStatus.textContent = 'Siap untuk testing...';
+          }
+        }, 5000);
+      }
+      
+      // Listen to socket events to update active team status
+      const socket = io();
+      
+      socket.on("lockstate", state => {
+        if (state.locked && state.activeTeam) {
+          activeTeam = state.activeTeam;
+          updateStatus(`Tim ${String.fromCharCode(64 + activeTeam)} aktif - Gunakan tombol juri`);
+        } else {
+          activeTeam = null;
+        }
+      });
+      
+      socket.on("buzz", ({ team }) => {
+        activeTeam = team;
+        updateStatus(`Tim ${String.fromCharCode(64 + team)} aktif - Gunakan tombol juri`);
+      });
+      
+      // Initialize
+      updateStatus('Panel testing siap digunakan');
+    });
+  </script>
+</body>
+</html>

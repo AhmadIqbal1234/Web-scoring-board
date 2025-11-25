@@ -517,7 +517,7 @@ function renderInitial() {
 
 renderInitial();
 
-// IMPROVED: Socket event handlers dengan better debugging
+// PERBAIKAN: Socket event handlers dengan better debugging
 socket.on("connect", () => {
     clientLogger.success('Connected to server - Socket ID: ' + socket.id);
     
@@ -598,15 +598,25 @@ socket.on("disconnect", () => {
     }
 });
 
-// Update skor realtime
+// PERBAIKAN: Update skor realtime - dengan protection tambahan
 socket.on("update", payload => {
-    console.log('📊 Score update received:', payload);
+    console.log('📊 Score update received from server:', payload);
     const { team, score } = payload;
-    const el = document.getElementById("score-" + team);
-    if (el) {
-        el.textContent = score;
-        el.classList.add('score-update');
-        setTimeout(() => el.classList.remove('score-update'), 600);
+    
+    // Validasi data
+    if (team && score !== undefined && team >= 1 && team <= TEAM_COUNT) {
+        const el = document.getElementById("score-" + team);
+        if (el) {
+            el.textContent = score;
+            el.classList.add('score-update');
+            setTimeout(() => el.classList.remove('score-update'), 600);
+            
+            clientLogger.success(`Score updated for team ${team}: ${score}`);
+        } else {
+            clientLogger.error(`Score element not found for team: ${team}`);
+        }
+    } else {
+        clientLogger.error('Invalid score update payload:', payload);
     }
 });
 

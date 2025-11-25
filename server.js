@@ -39,10 +39,13 @@ let esp32SocketId = null;
 let esp32LastIP = null;
 let esp32HeartbeatInterval = null;
 
-// IMPROVED: Request tracking untuk prevent spam
+// FIX: Request tracking untuk prevent spam dan double processing
 let recentRequests = new Map();
 const REQUEST_WINDOW_MS = 1000;
-const MAX_REQUESTS_PER_WINDOW = 3;
+const MAX_REQUESTS_PER_WINDOW = 2;
+
+// FIX: Track active requests untuk prevent race condition
+let activeRequests = new Set();
 
 const logger = {
   info: (message, data = null) => {
@@ -61,7 +64,7 @@ const logger = {
   }
 };
 
-// IMPROVED: Rate limiting helper
+// FIX: Improved Rate limiting helper dengan request ID
 function isRateLimited(identifier) {
   const now = Date.now();
   const windowStart = now - REQUEST_WINDOW_MS;
@@ -79,6 +82,26 @@ function isRateLimited(identifier) {
   
   requests.push(now);
   return false;
+}
+
+// FIX: Generate unique request ID untuk tracking
+function generateRequestId(team, action) {
+  return `req_${team}_${action}_${Date.now()}`;
+}
+
+// FIX: Check if request is already being processed
+function isRequestActive(requestId) {
+  return activeRequests.has(requestId);
+}
+
+// FIX: Mark request as active
+function markRequestActive(requestId) {
+  activeRequests.add(requestId);
+}
+
+// FIX: Mark request as completed
+function markRequestComplete(requestId) {
+  activeRequests.delete(requestId);
 }
 
 // IMPROVED: Audio System dengan better error handling
@@ -508,84 +531,97 @@ app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
 });
 
-// IMPROVED: Main update endpoint dengan DEBUG DETAILED
+// FIX: COMPLETELY REWRITTEN UPDATE ENDPOINT - SINGLE SOURCE OF TRUTH
 app.get("/update", async (req, res) => {
+  const requestId = generateRequestId(req.query.team, req.query.add);
+  
+  // Cek jika request ini sedang diproses
+  if (isRequestActive(requestId)) {
+    logger.warn('Request already being processed', { requestId, query: req.query });
+    return res.status(429).json({ error: "Request sedang diproses" });
+  }
+  
+  // Cek rate limiting
+  const clientIP = req.ip || req.connection.remoteAddress;
+  if (isRateLimited(`update_${clientIP}`)) {
+    logger.warn('Rate limited request', { ip: clientIP, query: req.query });
+    return res.status(429).json({ error: "Terlalu banyak request" });
+  }
+
   try {
-    console.log('=== 🎯 DEBUG UPDATE ENDPOINT ===');
+    console.log('=== 🎯 UPDATE ENDPOINT - PROCESSING START ===');
     console.log('📋 Query parameters:', req.query);
-    console.log('🌐 Client IP:', req.ip);
+    console.log('🌐 Client IP:', clientIP);
+    console.log('🆔 Request ID:', requestId);
     
+    // Mark request as active
+    markRequestActive(requestId);
+
+    // VALIDASI PARAMETER
     if (!req.query.team) {
       console.log('❌ Missing team parameter');
-      logger.error('Missing team parameter - Full query:', req.query);
+      markRequestComplete(requestId);
       return res.status(400).json({ error: "Parameter team diperlukan" });
     }
 
     const team = parseInt(req.query.team);
-    const clientIP = req.ip || req.connection.remoteAddress;
-    
-    console.log('🔢 Parsed team:', team, 'Type:', typeof team);
-    console.log('📊 Team toggle state:', teamToggleState);
-    
-    if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-      console.log('❌ Invalid team number');
-      logger.error('Invalid team', { 
-        team, 
-        parsedTeam: team,
-        queryTeam: req.query.team
-      });
-      return res.status(400).json({ error: "Tim tidak valid" });
-    }
-    
-    console.log('✅ Team validation passed');
-    console.log('🔘 Team enabled check:', teamToggleState[team - 1]);
-    
-    if (!teamToggleState[team - 1]) {
-      console.log('❌ Team is disabled');
-      logger.error('Team is disabled', { 
-        team, 
-        teamLetter: getTeamLetter(team)
-      });
-      return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
-    }
-    
     const add = parseInt(req.query.add) || 0;
     const isFirst = req.query.first === "1";
 
-    console.log('🔄 Processing - team:', team, 'add:', add, 'isFirst:', isFirst);
-    console.log('🔒 Current lockState:', lockState);
+    console.log('🔢 Parsed values - team:', team, 'add:', add, 'isFirst:', isFirst);
 
-    // Track ESP32 activity
+    // VALIDASI TEAM
+    if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+      console.log('❌ Invalid team number');
+      markRequestComplete(requestId);
+      return res.status(400).json({ error: "Tim tidak valid" });
+    }
+
+    // VALIDASI TEAM ENABLED
+    if (!teamToggleState[team - 1]) {
+      console.log('❌ Team is disabled');
+      markRequestComplete(requestId);
+      return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
+    }
+
+    // VALIDASI LOCK STATE UNTUK FIRST PRESS
+    if (isFirst) {
+      if (lockState.locked) {
+        console.log('❌ System already locked');
+        markRequestComplete(requestId);
+        return res.status(403).json({ error: "Sistem sudah terkunci" });
+      }
+    }
+
+    // VALIDASI LOCK STATE UNTUK SCORING
+    if (add !== 0) {
+      if (!lockState.locked) {
+        console.log('❌ System not locked for scoring');
+        markRequestComplete(requestId);
+        return res.status(403).json({ error: "Sistem tidak terkunci" });
+      }
+      if (lockState.activeTeam !== team) {
+        console.log('❌ Wrong team for scoring');
+        markRequestComplete(requestId);
+        return res.status(403).json({ error: "Bukan giliran tim ini" });
+      }
+    }
+
+    console.log('✅ All validations passed');
+
+    // TRACK ESP32 ACTIVITY
     if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
       lastEsp32Activity = new Date();
       console.log('📡 ESP32 Activity detected');
-      logger.info("ESP32 Activity", {
-        type: "buzzer",
-        team: team,
-        action: isFirst ? "first_press" : "scoring",
-        points: add,
-        ip: clientIP,
-        timestamp: lastEsp32Activity.toISOString()
-      });
-      
       updateESP32Status(true, null, clientIP);
     }
 
-    console.log('🔓 Lock state check - locked:', lockState.locked, 'activeTeam:', lockState.activeTeam);
-    
-    if (lockState.locked && team !== lockState.activeTeam) {
-      console.log('❌ Team locked - cannot process');
-      logger.error('Team locked', { 
-        team, 
-        activeTeam: lockState.activeTeam
-      });
-      return res.status(403).json({ error: "Tombol terkunci" });
-    }
-
+    // PROSES FIRST PRESS (BUZZER)
     if (isFirst && !lockState.locked) {
       console.log('🎮 FIRST PRESS - Activating team:', team);
-      lockState = { locked: true, activeTeam: team };
       
+      // Update lock state
+      lockState = { locked: true, activeTeam: team };
       console.log('📢 Emitting lockstate:', lockState);
       io.emit("lockstate", lockState);
       
@@ -593,7 +629,6 @@ app.get("/update", async (req, res) => {
       io.emit("buzz", { team });
       
       const audioFile = `Tim ${getTeamLetter(team)}.mp3`;
-      
       console.log('🎵 Emitting playTeamAudio for team:', team);
       io.emit("playTeamAudio", {
         team: team,
@@ -602,19 +637,28 @@ app.get("/update", async (req, res) => {
       });
       
       logger.info(`Memutar "${audioFile}" - Timer akan mulai setelah audio selesai`);
-      
       startTimerAfterAudio(team);
     }
 
+    // PROSES SCORING (JURY ACTION)
     if (add !== 0) {
-      console.log('➕ Adding score:', add, 'to team:', team);
-      scores[team - 1] += add;
+      console.log('➕ SCORING ACTION - Adding score:', add, 'to team:', team);
       
-      console.log('📢 Emitting score update for team:', team);
-      io.emit("update", { team, score: scores[team - 1] });
+      // Calculate new score
+      const oldScore = scores[team - 1];
+      const newScore = Math.max(0, oldScore + add); // Prevent negative scores
+      scores[team - 1] = newScore;
       
+      console.log('📊 Score updated:', { team, oldScore, newScore, add });
+      
+      // EMIT SCORE UPDATE HANYA SEKALI
+      console.log('📢 Emitting SINGLE score update for team:', team);
+      io.emit("update", { team, score: newScore });
+      
+      // Play jury audio
       timerAudio.playJuryAudio(add > 0);
       
+      // Send feedback message
       const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
       console.log('📢 Emitting AI message:', feedbackMessage);
       io.emit("aiMessage", {
@@ -624,16 +668,27 @@ app.get("/update", async (req, res) => {
       
       logger.info(`JURI: "${feedbackMessage}"`);
       
+      // Reset system
       resetTimer();
       lockState = { locked: false, activeTeam: null };
+      console.log('📢 Emitting final lockstate:', lockState);
       io.emit("lockstate", lockState);
     }
 
-    console.log('✅ UPDATE SUCCESS - Sending response');
-    res.json({ success: true, message: "OK", team, add, isFirst });
+    console.log('✅ UPDATE SUCCESS - Request completed');
+    markRequestComplete(requestId);
+    res.json({ 
+      success: true, 
+      message: "OK", 
+      team, 
+      add, 
+      isFirst,
+      newScore: add !== 0 ? scores[team - 1] : undefined
+    });
     
   } catch (error) {
     console.log('❌ UPDATE ERROR:', error);
+    markRequestComplete(requestId);
     logger.error('Error in /update endpoint:', error);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -650,7 +705,6 @@ app.get("/audioFinished", (req, res) => {
     
     if (audioFinishTimeout) {
       clearTimeout(audioFinishTimeout);
-      audioFinishTimeout = null;
     }
     
     isAudioPlaying = false;
@@ -818,7 +872,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// IMPROVED: Socket connection dengan better error handling
+// FIX: IMPROVED Socket connection dengan request tracking
 io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
@@ -887,12 +941,93 @@ io.on("connection", (socket) => {
   });
 });
 
+// Di bagian socket connection, tambahkan event untuk team button activity
+io.on("connection", (socket) => {
+  const clientType = socket.handshake.query.clientType || 'unknown';
+  const clientIP = socket.handshake.address;
+  
+  console.log('🔌 New client connected:', {
+    socketId: socket.id,
+    clientType: clientType,
+    ip: clientIP
+  });
+
+  if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
+    updateESP32Status(true, socket, clientIP);
+    console.log('📡 ESP32 Controller detected via Socket.IO');
+  }
+
+  // Send initial state
+  socket.emit("scores", scores);
+  socket.emit("config", config);
+  socket.emit("lockstate", lockState);
+  socket.emit("teamToggleState", teamToggleState);
+  
+  if (isTimerRunning) {
+    socket.emit("timerStart", { duration: timeRemaining });
+  }
+
+  // Test ping-pong
+  socket.on("ping", (data) => {
+    console.log('🏓 Ping received from client:', socket.id);
+    socket.emit("pong", { ...data, serverTime: Date.now() });
+  });
+
+  // Team button activity tracking
+  socket.on("teamButtonActivity", (data) => {
+    console.log('🔘 Team button activity:', data);
+    if (data.team && data.team >= 1 && data.team <= TEAM_COUNT) {
+      io.emit("teamButtonStatus", {
+        team: data.team,
+        connected: true,
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  socket.on("toggleTeam", (data) => {
+    try {
+      const { teamId, enabled } = data;
+      if (teamId >= 1 && teamId <= TEAM_COUNT) {
+        teamToggleState[teamId - 1] = enabled;
+        console.log('🔘 Team toggle from admin:', { teamId, enabled });
+        
+        io.emit("teamToggleUpdate", {
+          team: teamId,
+          enabled: enabled
+        });
+      }
+    } catch (error) {
+      console.log('❌ Error in toggleTeam socket event:', error);
+    }
+  });
+
+  socket.on("enableAllTeams", () => {
+    teamToggleState = Array(TEAM_COUNT).fill(true);
+    console.log('🔘 Enable all teams from admin');
+    
+    io.emit("allTeamsEnabled");
+  });
+
+  socket.on("disconnect", (reason) => {
+    if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
+      updateESP32Status(false);
+    }
+    
+    console.log('🔌 Client disconnected:', {
+      socketId: socket.id, 
+      reason: reason,
+      clientType: clientType
+    });
+  });
+});
+
 // Startup server
 async function startServer() {
   validateAudioFiles();
   
   http.listen(PORT, async () => {
-    console.log('\nSISTEM KUIS - PLAYER BUTTONS FIXED');
+    console.log('\nSISTEM KUIS - DOUBLE SCORE FIXED');
     console.log('───────────────────────────────────────────────────────');
     console.log(`Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     console.log(`Port: ${PORT}`);

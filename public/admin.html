@@ -68,6 +68,28 @@
         <strong>Status Timer:</strong> <span id="timerState">TIDAK AKTIF</span>
         | <strong>Waktu Tersisa:</strong> <span id="currentTime">00:00</span>
       </div>
+
+      <!-- Status Koneksi Sistem -->
+      <div class="connection-status" id="connectionStatus">
+        <div class="status-grid">
+          <div class="status-item">
+            <span class="status-label">Status Server:</span>
+            <span class="status-value connected" id="serverStatus">TERHUBUNG</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Tombol Tim:</span>
+            <span class="status-value connected" id="teamButtonsStatus">TERHUBUNG</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Kontrol Juri:</span>
+            <span class="status-value connected" id="juryControlsStatus">TERHUBUNG</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">ESP32 Controller:</span>
+            <span class="status-value disconnected" id="esp32OverallStatus">TERPUTUS</span>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="admin-panel">
@@ -111,6 +133,10 @@
           <button id="testESP32" class="admin-btn btn-test">
             TEST KONEKSI
           </button>
+
+          <button id="testAllButtons" class="admin-btn btn-test">
+            TEST ALL TOMBOL
+          </button>
         </div>
       </div>
     </section>
@@ -140,6 +166,27 @@
       <h2 class="panel-title">Manajemen 12 Tim</h2>
       
       <div class="teams-section">
+        <div class="teams-header">
+          <div class="connection-legend">
+            <div class="legend-item">
+              <div class="status-dot connected"></div>
+              <span>Tombol Terhubung</span>
+            </div>
+            <div class="legend-item">
+              <div class="status-dot disconnected"></div>
+              <span>Tombol Terputus</span>
+            </div>
+            <div class="legend-item">
+              <div class="status-dot active"></div>
+              <span>Tim Aktif</span>
+            </div>
+            <div class="legend-item">
+              <div class="status-dot searching"></div>
+              <span>Mencari Koneksi</span>
+            </div>
+          </div>
+        </div>
+        
         <div id="teams" class="teams-two-rows-container">
           <!-- tim card dari js/admin.js akan di inject sini -->
         </div>
