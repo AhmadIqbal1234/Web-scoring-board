@@ -35,28 +35,25 @@ app.use(helmet({
 
 // ===== SMART RATE LIMITING - FIXED IP DETECTION =====
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 menit
+  windowMs: 15 * 60 * 1000,
   max: (req) => {
-    // Dapatkan IP client dengan method yang benar
     let clientIP = req.ip || 
                   req.connection.remoteAddress || 
                   req.socket.remoteAddress ||
                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
     
-    // Debug logging untuk development
     if (!isProduction) {
       console.log(`[RATE LIMIT] Client IP: ${clientIP}, URL: ${req.url}`);
     }
     
-    // Whitelist untuk ESP32 dan development
     const whitelistIPs = [
-      '192.168.1.',    // ESP32 IP range
-      '127.0.0.1',     // Localhost IPv4
-      '::1',           // Localhost IPv6
-      '::ffff:127.0.0.1', // Localhost alternative
-      '::ffff:192.168.1.', // ESP32 IPv6 format
-      '172.',          // Docker internal
-      '10.'            // Private network
+      '192.168.1.',
+      '127.0.0.1',
+      '::1',
+      '::ffff:127.0.0.1',
+      '::ffff:192.168.1.',
+      '172.',
+      '10.'
     ];
     
     const whitelistURLs = [
@@ -68,20 +65,16 @@ const limiter = rateLimit({
       '/update'
     ];
     
-    // Cek apakah IP di whitelist
     const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
-    
-    // Cek apakah URL di whitelist
     const isWhitelistedURL = whitelistURLs.some(url => req.url.startsWith(url));
     
     if (isWhitelistedIP || isWhitelistedURL) {
       if (!isProduction) {
         console.log(`[RATE LIMIT] Whitelisted - IP: ${clientIP}, URL: ${req.url}`);
       }
-      return 10000; // Practically unlimited untuk whitelist
+      return 10000;
     }
     
-    // Untuk external IPs
     return isProduction ? 100 : 1000;
   },
   message: {
@@ -91,7 +84,6 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req, res) => {
-    // Skip successful requests dari logging
     return res.statusCode < 400;
   }
 });
@@ -231,7 +223,7 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// Validasi file audio - DIPERBAIKI PATH untuk production
+// Validasi file audio
 function validateAudioFiles() {
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
@@ -298,7 +290,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// TIMER SYSTEM - IMPROVED DENGAN SAFETY MECHANISM
+// TIMER SYSTEM
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.info("Timer already running, ignoring start request");
@@ -321,7 +313,6 @@ function startTimer(activeTeam = null) {
     timeRemaining--;
     io.emit("timerUpdate", { timeRemaining });
 
-    // Audio countdown
     if ([30, 20, 10, 5, 4, 3, 2, 1, 0].includes(timeRemaining)) {
       timerAudio.playCountdownAudio(timeRemaining);
     }
@@ -365,11 +356,10 @@ function resetTimer() {
   logger.info("Timer reset");
 }
 
-// Start timer setelah audio selesai - IMPROVED DENGAN SAFETY TIMEOUT
+// Start timer setelah audio selesai
 function startTimerAfterAudio(team) {
   logger.info("Starting timer after audio finished", { team });
   
-  // Safety timeout: jika setelah 5 detik belum ada konfirmasi audio selesai, start timer anyway
   audioFinishTimeout = setTimeout(() => {
     if (!isTimerRunning) {
       logger.info("SAFETY TIMEOUT: Starting timer after 5 seconds (audio might have failed)", { team });
@@ -418,7 +408,6 @@ app.get("/esp32checkin", (req, res) => {
   const team = req.query.team;
   const ip = req.ip || req.connection.remoteAddress;
   
-  // Update ESP32 status
   esp32Connected = true;
   lastEsp32Activity = new Date();
   esp32LastIP = ip;
@@ -574,7 +563,6 @@ app.get("/update", async (req, res) => {
 
   const team = parseInt(req.query.team);
   
-  // Cek apakah tim diaktifkan
   if (!teamToggleState[team - 1]) {
     logger.error('Team is disabled', { team });
     return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
@@ -586,7 +574,6 @@ app.get("/update", async (req, res) => {
 
   logger.info('/update called', { team, add, isFirst, ip });
 
-  // LOG ACTIVITY JIKA DARI ESP32
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
     lastEsp32Activity = new Date();
     logger.esp32("ESP32 Activity", {
@@ -833,7 +820,7 @@ io.on("connection", (socket) => {
   socket.emit("scores", scores);
   socket.emit("config", config);
   socket.emit("lockstate", lockState);
-  socket.emit("teamToggleState", teamToggleState); // Kirim state toggle team
+  socket.emit("teamToggleState", teamToggleState);
   
   if (isTimerRunning) {
     socket.emit("timerStart", { duration: timeRemaining });

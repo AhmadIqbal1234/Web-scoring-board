@@ -5,7 +5,7 @@ const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
 let teamToggleState = Array(TEAM_COUNT).fill(true);
 
-// IMPROVED: Enhanced Client Logger
+// Enhanced Client Logger
 const clientLogger = {
   info: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
@@ -14,38 +14,38 @@ const clientLogger = {
   
   warn: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] ⚠️ ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   },
   
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] ❌ ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   },
   
   success: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[CLIENT:${timestamp}] ✅ ${message}`, data || '');
+    console.log(`[CLIENT:${timestamp}] ${message}`, data || '');
   }
 };
 
-// IMPROVED: Debug semua socket events
-console.log('🔧 Setting up socket debugging...');
+// Debug semua socket events
+console.log('Setting up socket debugging...');
 
 const originalEmit = socket.emit;
 socket.emit = function(event, data) {
-    console.log(`🎯 [SOCKET EMIT] ${event}:`, data);
+    console.log(`[SOCKET EMIT] ${event}:`, data);
     return originalEmit.call(this, event, data);
 };
 
 const originalOn = socket.on;
 socket.on = function(event, callback) {
     return originalOn.call(this, event, function(data) {
-        console.log(`📥 [SOCKET RECEIVE] ${event}:`, data);
+        console.log(`[SOCKET RECEIVE] ${event}:`, data);
         callback(data);
     });
 };
 
-// IMPROVED: SISTEM AUDIO FILE
+// SISTEM AUDIO FILE
 class SistemAudioTim {
   constructor() {
     this.audioElements = new Map();
@@ -517,7 +517,7 @@ function renderInitial() {
 
 renderInitial();
 
-// PERBAIKAN: Socket event handlers dengan better debugging
+// Socket event handlers
 socket.on("connect", () => {
     clientLogger.success('Connected to server - Socket ID: ' + socket.id);
     
@@ -527,7 +527,6 @@ socket.on("connect", () => {
         liveIndicator.textContent = '● LIVE - Terhubung ke Server';
     }
     
-    // Test connection
     socket.emit('ping', { timestamp: Date.now(), message: 'Hello from client!' });
     
     loadInitialData();
@@ -535,7 +534,7 @@ socket.on("connect", () => {
 
 // Function untuk load initial data
 function loadInitialData() {
-    console.log('🔄 Loading initial data from server...');
+    console.log('Loading initial data from server...');
     
     Promise.all([
         fetch('/scores').then(r => {
@@ -555,12 +554,11 @@ function loadInitialData() {
         })
     ])
     .then(([scoresData, lockStateData, toggleStateData]) => {
-        console.log('✅ All initial data loaded successfully');
+        console.log('All initial data loaded successfully');
         console.log('Scores:', scoresData);
         console.log('LockState:', lockStateData);
         console.log('ToggleState:', toggleStateData);
         
-        // Update scores
         if (Array.isArray(scoresData)) {
             for (let i = 0; i < scoresData.length; i++) {
                 const el = document.getElementById("score-" + (i + 1));
@@ -568,25 +566,23 @@ function loadInitialData() {
             }
         }
         
-        // Update lock state
         if (lockStateData && lockStateData.locked && lockStateData.activeTeam) {
             console.log('Active team from lockstate:', lockStateData.activeTeam);
             showActiveTeam(lockStateData.activeTeam);
         }
         
-        // Update team toggle state
         if (Array.isArray(toggleStateData)) {
             teamToggleState = toggleStateData;
             updateTeamDisplay();
         }
     })
     .catch(err => {
-        console.error('❌ Error loading initial data:', err);
+        console.error('Error loading initial data:', err);
     });
 }
 
 socket.on("pong", (data) => {
-    console.log('🏓 Pong received from server:', data);
+    console.log('Pong received from server:', data);
 });
 
 socket.on("disconnect", () => {
@@ -598,12 +594,11 @@ socket.on("disconnect", () => {
     }
 });
 
-// PERBAIKAN: Update skor realtime - dengan protection tambahan
+// Update skor realtime
 socket.on("update", payload => {
-    console.log('📊 Score update received from server:', payload);
+    console.log('Score update received from server:', payload);
     const { team, score } = payload;
     
-    // Validasi data
     if (team && score !== undefined && team >= 1 && team <= TEAM_COUNT) {
         const el = document.getElementById("score-" + team);
         if (el) {
@@ -622,7 +617,7 @@ socket.on("update", payload => {
 
 // Reset semua skor
 socket.on("reset", arr => {
-    console.log('🔄 Reset scores received:', arr);
+    console.log('Reset scores received:', arr);
     if (Array.isArray(arr)) {
         arr.forEach((s, idx) => {
             const el = document.getElementById("score-" + (idx + 1));
@@ -633,7 +628,7 @@ socket.on("reset", arr => {
 
 // Status kunci tim
 socket.on("lockstate", state => {
-    console.log('🔒 Lock state update:', state);
+    console.log('Lock state update:', state);
     if (!state.locked) {
         resetDisplay();
     } else if (state.activeTeam) {
@@ -643,54 +638,58 @@ socket.on("lockstate", state => {
 
 // Event untuk update status toggle tim individual
 socket.on("teamToggleUpdate", data => {
-    console.log('🔘 Team toggle update:', data);
+    console.log('Team toggle update:', data);
     const { team, enabled } = data;
     
     if (team >= 1 && team <= TEAM_COUNT) {
         teamToggleState[team - 1] = enabled;
         updateTeamDisplay();
+        clientLogger.info(`Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`);
     }
 });
 
 // Event untuk enable semua tim
 socket.on("allTeamsEnabled", () => {
-    console.log('🔘 All teams enabled received');
+    console.log('All teams enabled received');
     teamToggleState = Array(TEAM_COUNT).fill(true);
     updateTeamDisplay();
+    clientLogger.info('All teams enabled');
 });
 
 // Event untuk disable semua tim
 socket.on("allTeamsDisabled", () => {
-    console.log('🔘 All teams disabled received');
+    console.log('All teams disabled received');
     teamToggleState = Array(TEAM_COUNT).fill(false);
     updateTeamDisplay();
+    clientLogger.info('All teams disabled');
 });
 
 // Event untuk initial team toggle state
 socket.on("teamToggleState", data => {
-    console.log('🔘 Team toggle state received:', data);
+    console.log('Team toggle state received:', data);
     if (Array.isArray(data)) {
         teamToggleState = data;
         updateTeamDisplay();
+        clientLogger.info('Team toggle state initialized from server');
     }
 });
 
-// IMPROVED: Buzz event dengan detailed logging
+// Buzz event
 socket.on("buzz", ({ team }) => {
-    console.log('🎯 BUZZ EVENT RECEIVED - Team:', team);
+    console.log('BUZZ EVENT RECEIVED - Team:', team);
     console.log('Current teamToggleState:', teamToggleState);
     
     if (teamToggleState[team - 1]) {
-        console.log('✅ Team is enabled, showing active team');
+        console.log('Team is enabled, showing active team');
         showActiveTeam(team);
     } else {
-        console.log('❌ Team is disabled, ignoring buzz');
+        console.log('Team is disabled, ignoring buzz');
     }
 });
 
-// IMPROVED: PlayTeamAudio event dengan debugging
+// PlayTeamAudio event
 socket.on("playTeamAudio", (data) => {
-    console.log('🎵 PLAY TEAM AUDIO EVENT:', data);
+    console.log('PLAY TEAM AUDIO EVENT:', data);
     const { team, audioFile, timerDuration } = data;
 
     console.log(`Starting audio for Team ${getTeamLetter(team)}: ${audioFile}`);
@@ -716,7 +715,7 @@ socket.on("playTeamAudio", (data) => {
 });
 
 socket.on("playTimerAudio", (data) => {
-    console.log('⏰ Play timer audio:', data);
+    console.log('Play timer audio:', data);
     const { seconds, audioFile } = data;
     
     timerAudio.putarAudio(audioFile);
@@ -724,14 +723,14 @@ socket.on("playTimerAudio", (data) => {
 
 // HANDLER AUDIO JURI
 socket.on("playJuryAudio", (data) => {
-    console.log('⚖️ Play jury audio:', data);
+    console.log('Play jury audio:', data);
     const { isCorrect, audioFile } = data;
 
     juryAudio.putarAudio(audioFile);
     
     const aiMessageEl = document.getElementById("aiMessage");
     if (aiMessageEl) {
-        const message = isCorrect ? 'JAWABAN BENAR! 🎉' : 'JAWABAN SALAH! ❌';
+        const message = isCorrect ? 'JAWABAN BENAR!' : 'JAWABAN SALAH!';
         aiMessageEl.textContent = message;
         aiMessageEl.classList.add("show");
         
@@ -745,7 +744,7 @@ socket.on("playJuryAudio", (data) => {
 let aiMessageTimeout;
 
 socket.on("aiMessage", (data) => {
-    console.log('🤖 AI message:', data);
+    console.log('AI message:', data);
     const aiMessageEl = document.getElementById("aiMessage");
     const message = data.message;
 
@@ -766,7 +765,7 @@ socket.on("aiMessage", (data) => {
 
 // TIMER EVENTS FROM SERVER
 socket.on("timerStart", (data) => {
-    console.log('⏰ Timer start:', data);
+    console.log('Timer start:', data);
     if (data.duration) {
         updateTimerDisplay(data.duration);
     }
@@ -779,17 +778,17 @@ socket.on("timerUpdate", (data) => {
 });
 
 socket.on("timerEnd", () => {
-    console.log('⏰ Timer end received');
+    console.log('Timer end received');
     updateTimerDisplay(0);
 });
 
 socket.on("timerReset", () => {
-    console.log('⏰ Timer reset received');
+    console.log('Timer reset received');
     resetTimerDisplay();
 });
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
-    console.log('✅ Display initialized - Enhanced debugging enabled');
+    console.log('Display initialized - Enhanced debugging enabled');
 });

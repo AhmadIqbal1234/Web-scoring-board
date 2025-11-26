@@ -13,8 +13,8 @@ let esp32Status = {
   ip: null
 };
 
-// Team Status Tracking - TAMBAHKAN INI
-let teamStatus = Array(TEAM_COUNT).fill(true); // true = aktif, false = nonaktif
+// Team Status Tracking
+let teamStatus = Array(TEAM_COUNT).fill(true);
 
 // Admin Logger
 const adminLogger = {
@@ -70,7 +70,7 @@ function getTeamLetter(index) {
     return String.fromCharCode(64 + index);
 }
 
-// Function untuk toggle status tim - TAMBAHKAN INI
+// Function untuk toggle status tim
 function toggleTeamStatus(teamNumber) {
     teamStatus[teamNumber - 1] = !teamStatus[teamNumber - 1];
     
@@ -80,7 +80,6 @@ function toggleTeamStatus(teamNumber) {
     
     if (teamCard && toggleBtn && badgeEl) {
         if (teamStatus[teamNumber - 1]) {
-            // Tim diaktifkan
             teamCard.classList.remove('team-disabled');
             toggleBtn.textContent = 'NONAKTIFKAN';
             toggleBtn.classList.remove('toggle-off');
@@ -88,7 +87,6 @@ function toggleTeamStatus(teamNumber) {
             badgeEl.textContent = "MENUNGGU";
             badgeEl.className = "team-status status-waiting";
         } else {
-            // Tim dinonaktifkan
             teamCard.classList.add('team-disabled');
             toggleBtn.textContent = 'AKTIFKAN';
             toggleBtn.classList.remove('toggle-on');
@@ -97,6 +95,19 @@ function toggleTeamStatus(teamNumber) {
             badgeEl.className = "team-status status-disabled";
         }
     }
+    
+    fetch(`/toggleTeam?team=${teamNumber}&enabled=${teamStatus[teamNumber - 1]}`)
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .then(data => {
+            adminLogger.info(`Team ${getTeamLetter(teamNumber)} toggle updated on server`, data);
+        })
+        .catch(err => {
+            adminLogger.error('Failed to update team toggle on server:', err);
+            teamStatus[teamNumber - 1] = !teamStatus[teamNumber - 1];
+        });
     
     adminLogger.info(`Team ${getTeamLetter(teamNumber)} ${teamStatus[teamNumber - 1] ? 'diaktifkan' : 'dinonaktifkan'}`);
     showNotification(`Tim ${getTeamLetter(teamNumber)} ${teamStatus[teamNumber - 1] ? 'diaktifkan' : 'dinonaktifkan'}`, "info");
@@ -107,11 +118,9 @@ function createTeamControls() {
     teamsContainer.innerHTML = '';
     teamsContainer.className = 'teams-two-rows-container';
     
-    // Create first row (Teams 1-6)
     const firstRow = document.createElement('div');
     firstRow.className = 'teams-row first-row';
     
-    // Create second row (Teams 7-12)
     const secondRow = document.createElement('div');
     secondRow.className = 'teams-row second-row';
     
@@ -134,9 +143,8 @@ function createTeamControls() {
             </div>
         `;
         
-        // Add hover effect - hanya untuk tim aktif
         teamDiv.addEventListener('mouseenter', () => {
-            if (teamStatus[i - 1]) { // Hanya efek hover untuk tim aktif
+            if (teamStatus[i - 1]) {
                 teamDiv.style.transform = 'translateY(-3px)';
                 teamDiv.style.boxShadow = '0 8px 20px rgba(255, 215, 0, 0.2)';
             }
@@ -146,16 +154,14 @@ function createTeamControls() {
             teamDiv.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
         });
         
-        // Add click event untuk toggle
         const toggleBtn = teamDiv.querySelector(`#toggle-${i}`);
         if (toggleBtn) {
             toggleBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevent triggering team card click
+                e.stopPropagation();
                 toggleTeamStatus(i);
             });
         }
         
-        // Distribute teams between two rows
         if (i <= 6) {
             firstRow.appendChild(teamDiv);
         } else {
@@ -247,7 +253,6 @@ function testESP32Connection() {
     return;
   }
   
-  // Kirim test event ke ESP32 jika terhubung
   socket.emit("testConnection", {
     type: "adminTest",
     timestamp: new Date().toISOString(),
@@ -265,7 +270,6 @@ document.getElementById("setConfig").addEventListener("click", () => {
     
     adminLogger.info('Configuration update requested', { plus, minus, timerDuration });
     
-    // Validasi input
     if (isNaN(plus) || isNaN(minus) || isNaN(timerDuration)) {
         showNotification("Input konfigurasi tidak valid!", "error");
         return;
@@ -297,7 +301,6 @@ function updateConfigDisplay() {
 }
 
 // Reset dengan reset status tim juga
-// Helper: pastikan SweetAlert tersedia (load dinamis jika perlu)
 function ensureSwal() {
     return new Promise((resolve) => {
         if (typeof Swal !== 'undefined') return resolve(true);
@@ -311,10 +314,8 @@ function ensureSwal() {
     });
 }
 
-// Custom confirmation modal used when SweetAlert isn't available
 function showCustomConfirm(title, message) {
     return new Promise((resolve) => {
-        // Create overlay
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
         overlay.style.left = '0';
@@ -395,7 +396,6 @@ function doReset() {
     const originalInner = btn.dataset.originalInner || btn.innerHTML;
     btn.dataset.originalInner = originalInner;
 
-    // Set loading state
     btn.disabled = true;
     btn.classList.add('loading');
     btn.innerHTML = '<span></span> MEMPROSES...';
@@ -406,10 +406,14 @@ function doReset() {
             return r.json();
         })
         .then(data => {
-            // Reset semua tim menjadi aktif
             teamStatus = Array(TEAM_COUNT).fill(true);
-
-            // Update UI untuk semua tim
+            return fetch('/enableAllTeams');
+        })
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .then(data => {
             for (let i = 1; i <= TEAM_COUNT; i++) {
                 const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
                 const toggleBtn = document.getElementById(`toggle-${i}`);
@@ -433,7 +437,6 @@ function doReset() {
             throw err;
         })
         .finally(() => {
-            // Restore button state
             btn.disabled = false;
             btn.classList.remove('loading');
             btn.innerHTML = btn.dataset.originalInner || 'RESET SEMUA SKOR';
@@ -445,7 +448,6 @@ document.getElementById("reset").addEventListener("click", () => {
 
     ensureSwal().then((available) => {
         if (!available) {
-            // Jika gagal memuat SweetAlert, tampilkan custom modal sebagai fallback (bukan native confirm)
             showCustomConfirm('Yakin ingin mereset semua skor?', 'Semua skor akan diatur ke 0 dan semua tim akan diaktifkan kembali.').then(confirmed => {
                 if (confirmed) doReset();
             });
@@ -536,7 +538,6 @@ function initializeJuryControls() {
 }
 
 function handleJuryPlus() {
-    // Validasi tambahan untuk memastikan tombol tidak bisa diklik ketika disabled
     const juryPlus = document.getElementById("juryPlus");
     if (juryPlus && juryPlus.disabled) {
         adminLogger.warn('Jury plus clicked but button is disabled');
@@ -544,7 +545,6 @@ function handleJuryPlus() {
     }
     
     if (lockState.activeTeam) {
-        // Cek apakah tim aktif tidak dinonaktifkan
         if (!teamStatus[lockState.activeTeam - 1]) {
             showNotification(`Tim ${getTeamLetter(lockState.activeTeam)} sedang dinonaktifkan!`, "warning");
             return;
@@ -575,7 +575,6 @@ function handleJuryPlus() {
 }
 
 function handleJuryMinus() {
-    // Validasi tambahan untuk memastikan tombol tidak bisa diklik ketika disabled
     const juryMinus = document.getElementById("juryMinus");
     if (juryMinus && juryMinus.disabled) {
         adminLogger.warn('Jury minus clicked but button is disabled');
@@ -583,7 +582,6 @@ function handleJuryMinus() {
     }
     
     if (lockState.activeTeam) {
-        // Cek apakah tim aktif tidak dinonaktifkan
         if (!teamStatus[lockState.activeTeam - 1]) {
             showNotification(`Tim ${getTeamLetter(lockState.activeTeam)} sedang dinonaktifkan!`, "warning");
             return;
@@ -601,7 +599,7 @@ function handleJuryMinus() {
             })
             .then(data => {
                 adminLogger.info('Jury minus applied', data);
-                showNotification(`Tim ${getTeamLetter(lockState.activeTeam)} ${config.minus} poin!`, "warning");
+                showNotification(`${config.minus} poin!`, "warning");
             })
             .catch(err => {
                 adminLogger.error('Jury minus error:', err);
@@ -615,7 +613,6 @@ function handleJuryMinus() {
 
 // Notification system
 function showNotification(message, type = "success") {
-    // Remove existing notification
     const existingNotification = document.querySelector('.admin-notification');
     if (existingNotification) {
         existingNotification.remove();
@@ -627,12 +624,10 @@ function showNotification(message, type = "success") {
     
     document.body.appendChild(notification);
     
-    // Show notification
     setTimeout(() => {
         notification.classList.add('show');
     }, 100);
     
-    // Auto hide after 3 seconds
     setTimeout(() => {
         notification.classList.remove('show');
         setTimeout(() => {
@@ -678,7 +673,6 @@ function updateTimerStatus(state, seconds) {
         const secs = seconds % 60;
         currentTime.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
         
-        // Update color based on time
         if (seconds <= 10) {
             currentTime.style.color = '#f44336';
         } else if (seconds <= 30) {
@@ -705,11 +699,9 @@ socket.on("esp32Activity", (activity) => {
         ip: activity.ip
     });
     
-    // Tampilkan notifikasi untuk aktivitas penting
     if (activity.activity && activity.activity.type === 'buzzer') {
         showNotification(`ESP32: Tombol ditekan - Tim ${getTeamLetter(activity.activity.team)}`, "info");
     } else if (activity.activity && activity.activity.type === 'heartbeat') {
-        // Tidak perlu notifikasi untuk heartbeat, hanya log
         adminLogger.esp32('Heartbeat received', activity);
     }
 });
@@ -742,7 +734,6 @@ socket.on("lockstate", (state) => {
         unlockBtn.disabled = !state.locked;
     }
 
-    // Update tampilan kontrol juri
     if (state.locked && state.activeTeam) {
         if (juryControls) {
             juryControls.style.display = "flex";
@@ -754,7 +745,6 @@ socket.on("lockstate", (state) => {
             activeTeamLabel.style.display = "block";
         }
         
-        // Enable tombol juri ketika ada tim aktif
         if (juryPlus) juryPlus.disabled = false;
         if (juryMinus) juryMinus.disabled = false;
         
@@ -767,32 +757,27 @@ socket.on("lockstate", (state) => {
         if (waitingLabel) waitingLabel.style.display = "block";
         if (activeTeamLabel) activeTeamLabel.style.display = "none";
         
-        // Nonaktifkan tombol juri (tapi biarkan tetap visible di DOM)
         if (juryPlus) juryPlus.disabled = true;
         if (juryMinus) juryMinus.disabled = true;
         
         adminLogger.info('All teams unlocked');
     }
 
-    // Update team badges dengan memperhitungkan status aktif/nonaktif
     for (let i = 1; i <= TEAM_COUNT; i++) {
         const badgeEl = document.getElementById(`badge-${i}`);
         const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
         
         if (badgeEl) {
             if (!teamStatus[i - 1]) {
-                // Tim dinonaktifkan
                 badgeEl.textContent = "NONAKTIF";
                 badgeEl.className = "team-status status-disabled";
                 if (teamCard) teamCard.classList.add('team-disabled');
             } else if (state.locked && state.activeTeam === i) {
-                // Tim aktif dan sedang bermain
                 badgeEl.textContent = "AKTIF";
                 badgeEl.className = "team-status status-active";
                 if (teamCard) teamCard.classList.add('active');
                 if (teamCard) teamCard.classList.remove('team-disabled');
             } else {
-                // Tim aktif tapi menunggu
                 badgeEl.textContent = "MENUNGGU";
                 badgeEl.className = "team-status status-waiting";
                 if (teamCard) teamCard.classList.remove('active');
@@ -829,11 +814,10 @@ socket.on("reset", (scores) => {
 function initializeAdmin() {
     createTeamControls();
     initializeJuryControls();
-    initializeESP32Controls(); // Initialize ESP32 controls
+    initializeESP32Controls();
     updateTimerStatus('TIDAK AKTIF', 0);
-    refreshESP32Status(); // Load initial ESP32 status
+    refreshESP32Status();
     
-    // Load initial data dengan error handling
     Promise.all([
         fetch('/lockstate').then(r => {
             if (!r.ok) throw new Error('Failed to fetch lockstate');
@@ -843,19 +827,28 @@ function initializeAdmin() {
             if (!r.ok) throw new Error('Failed to fetch scores');
             return r.json();
         }),
-        fetch('/esp32status').then(r => { //Load ESP32 status
+        fetch('/esp32status').then(r => {
             if (!r.ok) throw new Error('Failed to fetch ESP32 status');
             return r.json();
+        }),
+        fetch('/teamToggleState').then(r => {
+            if (!r.ok) throw new Error('Failed to fetch team toggle state');
+            return r.json();
         })
-    ]).then(([lockStateData, scoresData, esp32Data]) => {
+    ]).then(([lockStateData, scoresData, esp32Data, toggleStateData]) => {
         lockState = lockStateData;
+        
+        if (Array.isArray(toggleStateData)) {
+            teamStatus = toggleStateData;
+        }
+        
         adminLogger.info('Initial data loaded', { 
             lockState: lockStateData, 
             scores: scoresData,
-            esp32: esp32Data 
+            esp32: esp32Data,
+            teamToggleState: toggleStateData
         });
         
-        // Update scores display
         for (let i = 1; i <= TEAM_COUNT; i++) {
             const scoreEl = document.getElementById(`score-${i}`);
             if (scoreEl) {
@@ -863,7 +856,30 @@ function initializeAdmin() {
             }
         }
         
-        // Update ESP32 status
+        for (let i = 1; i <= TEAM_COUNT; i++) {
+            const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
+            const toggleBtn = document.getElementById(`toggle-${i}`);
+            const badgeEl = document.getElementById(`badge-${i}`);
+            
+            if (teamCard && toggleBtn && badgeEl) {
+                if (teamStatus[i - 1]) {
+                    teamCard.classList.remove('team-disabled');
+                    toggleBtn.textContent = 'NONAKTIFKAN';
+                    toggleBtn.classList.remove('toggle-off');
+                    toggleBtn.classList.add('toggle-on');
+                    badgeEl.textContent = "MENUNGGU";
+                    badgeEl.className = "team-status status-waiting";
+                } else {
+                    teamCard.classList.add('team-disabled');
+                    toggleBtn.textContent = 'AKTIFKAN';
+                    toggleBtn.classList.remove('toggle-on');
+                    toggleBtn.classList.add('toggle-off');
+                    badgeEl.textContent = "NONAKTIF";
+                    badgeEl.className = "team-status status-disabled";
+                }
+            }
+        }
+        
         updateESP32Status(esp32Data);
         
     }).catch(err => {
@@ -877,14 +893,12 @@ document.addEventListener('DOMContentLoaded', function() {
     adminLogger.info('Admin panel initializing...');
     adminLogger.esp32('ESP32 monitoring system activated');
     initializeAdmin();
-    // Debug: laporkan apakah SweetAlert tersedia setelah inisialisasi
     try {
         if (typeof Swal === 'undefined') {
             adminLogger.warn('SweetAlert2 tidak terdeteksi pada saat load. Mungkin diblokir atau gagal dimuat.');
             showNotification('SweetAlert2 tidak ter-load; menggunakan fallback.', 'warning');
         } else {
             adminLogger.info('SweetAlert2 tersedia.');
-            showNotification('SweetAlert2 aktif.', 'success');
         }
     } catch (e) {
         console.error('Error checking Swal availability', e);
