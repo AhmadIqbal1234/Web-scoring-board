@@ -160,6 +160,9 @@ class TimerAudioSystem {
       correct: 'benar.mp3',
       wrong: 'salah.mp3'
     };
+
+    // Audio yang akan diputar sebelum audio tim
+    this.preTeamAudio = 'buzzer.mp3';
   }
 
   playCountdownAudio(seconds) {
@@ -182,6 +185,19 @@ class TimerAudioSystem {
       });
       logger.audio(`Memutar audio juri: ${audioFile} (${isCorrect ? 'BENAR' : 'SALAH'})`);
     }
+  }
+
+  // Method untuk memutar audio sebelum audio tim
+  playPreTeamAudio(team) {
+    if (this.preTeamAudio) {
+      io.emit("playPreTeamAudio", {
+        team: team,
+        audioFile: this.preTeamAudio
+      });
+      logger.audio(`Memutar pre-team audio: ${this.preTeamAudio} untuk tim ${team}`);
+      return true;
+    }
+    return false;
   }
 }
 
@@ -253,7 +269,7 @@ function validateAudioFiles() {
     'Tim G.mp3', 'Tim H.mp3', 'Tim I.mp3', 'Tim J.mp3', 'Tim K.mp3', 'Tim L.mp3',
     '30 detik.mp3', '20 detik.mp3', '10 detik.mp3', '5 detik.mp3', '4 detik.mp3',
     '3 detik.mp3', '2 detik.mp3', '1 detik.mp3', 'waktu habis.mp3',
-    'benar.mp3', 'salah.mp3'
+    'benar.mp3', 'salah.mp3', 'buzzer.mp3' // Ditambahkan buzzer.mp3
   ];
   
   logger.info("Validating audio files...");
@@ -356,6 +372,19 @@ function resetTimer() {
   logger.info("Timer reset");
 }
 
+// Function untuk memutar audio buzzer terlebih dahulu, kemudian audio tim
+function playBuzzerThenTeamAudio(team) {
+  const teamAudioFile = getTeamAudioFile(team);
+  
+  logger.audio(`Memulai sequence audio: buzzer -> ${teamAudioFile}`, { team });
+  
+  // Pertama, memutar audio buzzer
+  timerAudio.playPreTeamAudio(team);
+  
+  // Setelah buzzer selesai, memutar audio tim
+  // Client akan mengirim event "preTeamAudioFinished" ketika buzzer selesai
+}
+
 // Start timer setelah audio selesai
 function startTimerAfterAudio(team) {
   logger.info("Starting timer after audio finished", { team });
@@ -366,12 +395,6 @@ function startTimerAfterAudio(team) {
       startTimer(team);
     }
   }, 5000);
-  
-  setTimeout(() => {
-    if (!isTimerRunning) {
-      logger.info("Audio playback should have started, waiting for client confirmation...", { team });
-    }
-  }, 500);
 }
 
 // Function untuk update ESP32 status dan broadcast
@@ -601,15 +624,8 @@ app.get("/update", async (req, res) => {
     io.emit("lockstate", lockState);
     io.emit("buzz", { team });
     
-    const audioFile = getTeamAudioFile(team);
-    
-    io.emit("playTeamAudio", {
-      team: team,
-      audioFile: audioFile,
-      timerDuration: config.timerDuration
-    });
-    
-    logger.audio(`Memutar "${audioFile}" - Timer akan mulai setelah audio selesai`);
+    // Memutar sequence audio: buzzer -> audio tim
+    playBuzzerThenTeamAudio(team);
     
     startTimerAfterAudio(team);
   }
@@ -662,6 +678,32 @@ app.get("/audioFinished", (req, res) => {
     success: true, 
     message: "Audio finished processed",
     timerStarted: isTimerRunning
+  });
+});
+
+// Route baru untuk menangani selesainya pre-team audio (buzzer)
+app.get("/preTeamAudioFinished", (req, res) => {
+  const team = parseInt(req.query.team);
+  
+  logger.info("Pre-team audio (buzzer) finished", { team });
+  
+  if (team) {
+    const teamAudioFile = getTeamAudioFile(team);
+    
+    // Setelah buzzer selesai, memutar audio tim
+    io.emit("playTeamAudio", {
+      team: team,
+      audioFile: teamAudioFile,
+      timerDuration: config.timerDuration
+    });
+    
+    logger.audio(`Memutar "${teamAudioFile}" setelah buzzer selesai`);
+  }
+  
+  res.json({ 
+    success: true, 
+    message: "Pre-team audio finished, team audio started",
+    team: team
   });
 });
 
@@ -779,7 +821,8 @@ app.get("/health", (req, res) => {
       safety: "5-second safety timeout implemented",
       jury: "Audio feedback untuk tombol juri (benar/salah)",
       tracking: "ESP32 HTTP Heartbeat System Active",
-      teamToggle: "Team toggle controls - Enable/disable individual teams"
+      teamToggle: "Team toggle controls - Enable/disable individual teams",
+      buzzer: "BUZZER FIRST - Memutar buzzer.mp3 sebelum audio tim"
     }
   });
 });
@@ -825,6 +868,25 @@ io.on("connection", (socket) => {
   if (isTimerRunning) {
     socket.emit("timerStart", { duration: timeRemaining });
   }
+
+  // Event handler untuk pre-team audio finished
+  socket.on("preTeamAudioFinished", (data) => {
+    const team = data.team;
+    logger.info("Pre-team audio finished via Socket.IO", { team });
+    
+    if (team) {
+      const teamAudioFile = getTeamAudioFile(team);
+      
+      // Setelah buzzer selesai, memutar audio tim
+      io.emit("playTeamAudio", {
+        team: team,
+        audioFile: teamAudioFile,
+        timerDuration: config.timerDuration
+      });
+      
+      logger.audio(`Memutar "${teamAudioFile}" setelah buzzer selesai (Socket.IO)`);
+    }
+  });
 
   socket.on("disconnect", (reason) => {
     if (clientType === 'esp32' || clientIP.includes('192.168.1.')) {
