@@ -249,8 +249,9 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// Validasi file audio
+// ===== PERBAIKAN: Validasi file audio - FIXED possibleDirs =====
 function validateAudioFiles() {
+  // TAMBAHKAN INI: Definisikan possibleDirs di dalam fungsi
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
     join(__dirname, "public", "audio"),
@@ -525,6 +526,7 @@ app.get("/esp32checkin", (req, res) => {
 });
 
 // ===== STATIC FILE SERVING dengan path yang robust =====
+// PERBAIKAN: Pindahkan possiblePublicDirs ke sini
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
   join(__dirname, "public"),
@@ -532,7 +534,7 @@ const possiblePublicDirs = [
 ];
 
 let publicDirFound = null;
-for (const dir of possibleDirs) {
+for (const dir of possiblePublicDirs) {
   if (fs.existsSync(dir)) {
     publicDirFound = dir;
     logger.info(`Public directory found: ${dir}`);
@@ -1099,14 +1101,7 @@ async function startServer() {
     console.log(`Port: ${PORT}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log('───────────────────────────────────────────────────────');
-    console.log('TEST ENDPOINTS:');
-    console.log(`Test Buzzer: http://localhost:${PORT}/testBuzzer`);
-    console.log(`Test Audio Sequence: http://localhost:${PORT}/testAudioSequence?team=1`);
-    console.log(`Trigger Audio Sequence: http://localhost:${PORT}/triggerAudioSequence?team=1`);
-    console.log(`ESP32 Status: http://localhost:${PORT}/esp32status`);
-    console.log(`ESP32 Debug: http://localhost:${PORT}/debug/esp32`);
-    console.log('───────────────────────────────────────────────────────\n');
+    console.log('───────────────────────────────────────────────────────')
   });
 }
 
