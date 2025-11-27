@@ -5,7 +5,7 @@ const TEAM_COUNT = 12;
 let config = { plus: 5, minus: -2, timerDuration: 30 };
 let lockState = { locked: false, activeTeam: null };
 
-// ESP32 Status Tracking - DIPERBAIKI
+// ESP32 Status Tracking - DIPERBAIKI BESAR
 let esp32Status = {
   connected: false,
   lastActivity: null,
@@ -174,7 +174,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// Function untuk update ESP32 display - DIPERBAIKI
+// Function untuk update ESP32 display - DIPERBAIKI BESAR
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -210,28 +210,39 @@ function updateESP32Status(status) {
       
       let timeText = activityDate.toLocaleTimeString('id-ID') + " - " + activityDate.toLocaleDateString('id-ID');
       
-      if (timeDiff < 60) {
+      if (timeDiff < 10) {
+        timeText += ` (BARU SAJA)`;
+        esp32LastActivity.style.color = "#4caf50";
+        esp32LastActivity.style.fontWeight = "bold";
+      } else if (timeDiff < 60) {
         timeText += ` (${timeDiff} detik yang lalu)`;
+        esp32LastActivity.style.color = "#ff9800";
+        esp32LastActivity.style.fontWeight = "normal";
       } else if (timeDiff < 3600) {
         timeText += ` (${Math.floor(timeDiff / 60)} menit yang lalu)`;
+        esp32LastActivity.style.color = "#ff9800";
+        esp32LastActivity.style.fontWeight = "normal";
       } else {
         timeText += ` (${Math.floor(timeDiff / 3600)} jam yang lalu)`;
+        esp32LastActivity.style.color = "#f44336";
+        esp32LastActivity.style.fontWeight = "normal";
       }
       
       esp32LastActivity.textContent = timeText;
     } else {
       esp32LastActivity.textContent = "Belum ada aktivitas";
+      esp32LastActivity.style.color = "#f44336";
     }
   }
   
   if (esp32SocketId) {
-    esp32SocketId.textContent = esp32Status.socketId || "-";
+    esp32SocketId.textContent = esp32Status.socketId || "HTTP Connection";
   }
   
   adminLogger.esp32('Status Updated', esp32Status);
 }
 
-// Function untuk ESP32 controls - DIPERBAIKI
+// Function untuk ESP32 controls - DIPERBAIKI BESAR
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -244,8 +255,15 @@ function initializeESP32Controls() {
     testBtn.addEventListener("click", testESP32Connection);
   }
   
-  // Auto-refresh status setiap 5 detik
-  setInterval(refreshESP32Status, 5000);
+  // Auto-refresh status setiap 3 detik (lebih cepat)
+  setInterval(refreshESP32Status, 3000);
+  
+  // Juga refresh saat halaman visible
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      refreshESP32Status();
+    }
+  });
 }
 
 function refreshESP32Status() {

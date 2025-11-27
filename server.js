@@ -113,7 +113,7 @@ let isTimerRunning = false;
 let audioPlaying = false;
 let audioFinishTimeout = null;
 
-// ESP32 Status Tracking - DIPERBAIKI
+// ESP32 Status Tracking - DIPERBAIKI BESAR
 let esp32Connected = false;
 let lastEsp32Activity = null;
 let esp32SocketId = null;
@@ -251,7 +251,6 @@ function generateFeedbackMessage(team, isCorrect, points) {
 
 // ===== PERBAIKAN: Validasi file audio - FIXED possibleDirs =====
 function validateAudioFiles() {
-  // TAMBAHKAN INI: Definisikan possibleDirs di dalam fungsi
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
     join(__dirname, "public", "audio"),
@@ -292,7 +291,6 @@ function validateAudioFiles() {
   requiredFiles.forEach(file => {
     const filePath = join(audioDirFound, file);
     if (fs.existsSync(filePath)) {
-      // Check if file is not empty (placeholder)
       const stats = fs.statSync(filePath);
       if (stats.size > 0) {
         foundFiles.push(file);
@@ -315,9 +313,29 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== ESP32 STATUS SYSTEM - DIPERBAIKI =====
+// ===== ESP32 STATUS SYSTEM - DIPERBAIKI BESAR =====
 
-// Function untuk update ESP32 status dan broadcast
+// Function khusus untuk HTTP activity dari ESP32 - BARU
+function updateESP32FromHTTP(ip, activityType = "http_activity") {
+  // SELALU set connected untuk HTTP activity
+  esp32Connected = true;
+  lastEsp32Activity = new Date();
+  esp32Status.connected = true;
+  esp32Status.lastActivity = lastEsp32Activity;
+  esp32Status.lastCheckin = new Date();
+  esp32Status.connectionType = activityType;
+  esp32Status.ip = ip;
+  
+  logger.esp32(`ESP32 HTTP Activity - ${activityType}`, {
+    ip: ip,
+    timestamp: lastEsp32Activity.toISOString()
+  });
+  
+  // Broadcast status update
+  io.emit("esp32Status", esp32Status);
+}
+
+// Function untuk update ESP32 status dan broadcast - DIPERBAIKI
 function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
   const previousStatus = esp32Connected;
   esp32Connected = connected;
@@ -347,41 +365,42 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
       activityType: activityType
     });
   } else {
-    if (previousStatus) {
+    // HANYA update status disconnected jika benar-benar perlu
+    if (previousStatus && activityType !== "http_request") {
       logger.esp32("ESP32 Controller Disconnected", {
         socketId: esp32SocketId,
         timestamp: new Date().toISOString(),
         reason: activityType
       });
+      esp32Status.connected = false;
+      esp32Status.connectionType = "disconnected";
     }
-    esp32Status.connected = false;
-    esp32Status.connectionType = "disconnected";
   }
   
-  // Broadcast status ke semua client
+  // SELALU broadcast status terbaru
   io.emit("esp32Status", esp32Status);
   
   // Log perubahan status
-  if (previousStatus !== connected) {
-    logger.esp32(`ESP32 Status Changed: ${previousStatus ? 'CONNECTED' : 'DISCONNECTED'} -> ${connected ? 'CONNECTED' : 'DISCONNECTED'}`);
+  if (previousStatus !== connected && connected) {
+    logger.esp32(`ESP32 Status Changed: DISCONNECTED -> CONNECTED (${activityType})`);
   }
 }
 
-// Health check system untuk ESP32
+// Health check system untuk ESP32 - PERBAIKAN: Lebih toleran
 setInterval(() => {
   if (esp32Connected && lastEsp32Activity) {
     const timeSinceLastActivity = Date.now() - lastEsp32Activity.getTime();
-    const timeoutThreshold = 45000; // 45 detik (diperpanjang)
+    const timeoutThreshold = 120000; // 2 MENIT (diperpanjang jauh)
     
     if (timeSinceLastActivity > timeoutThreshold) {
-      logger.esp32("ESP32 auto-disconnect due to inactivity", {
+      logger.esp32("ESP32 auto-disconnect due to extended inactivity", {
         lastActivity: lastEsp32Activity,
         inactiveTime: timeSinceLastActivity
       });
-      updateESP32Status(false, null, null, "inactivity_timeout");
+      updateESP32Status(false, null, null, "extended_inactivity_timeout");
     }
   }
-}, 15000); // Check setiap 15 detik
+}, 30000); // Check setiap 30 detik
 
 // TIMER SYSTEM
 function startTimer(activeTeam = null) {
@@ -494,39 +513,7 @@ function startTimerAfterAudio(team) {
   }, 5000);
 }
 
-// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based) - DIPERBAIKI
-app.get("/esp32checkin", (req, res) => {
-  const action = req.query.action || 'heartbeat';
-  const team = req.query.team;
-  const ip = req.ip || req.connection.remoteAddress;
-  
-  // Dapatkan IP asli (handle proxy/load balancer)
-  const realIP = req.headers['x-forwarded-for'] || 
-                 req.headers['x-real-ip'] || 
-                 req.connection.remoteAddress || 
-                 req.socket.remoteAddress ||
-                 ip;
-  
-  updateESP32Status(true, null, realIP, `http_${action}`);
-  
-  logger.esp32(`ESP32 HTTP Check-in: ${action}`, {
-    team: team,
-    ip: realIP,
-    userAgent: req.headers['user-agent'],
-    timestamp: new Date().toISOString()
-  });
-  
-  res.json({ 
-    success: true, 
-    message: "ESP32 check-in received",
-    status: "CONTROLLER ONLINE",
-    timestamp: new Date().toISOString(),
-    yourIP: realIP
-  });
-});
-
 // ===== STATIC FILE SERVING dengan path yang robust =====
-// PERBAIKAN: Pindahkan possiblePublicDirs ke sini
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
   join(__dirname, "public"),
@@ -706,6 +693,41 @@ app.get("/testAudioSequence", (req, res) => {
   });
 });
 
+// ===== ROUTES UNTUK ESP32 =====
+
+// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based) - DIPERBAIKI BESAR
+app.get("/esp32checkin", (req, res) => {
+  const action = req.query.action || 'heartbeat';
+  const team = req.query.team;
+  const ip = req.ip || req.connection.remoteAddress;
+  
+  // Dapatkan IP asli
+  const realIP = req.headers['x-forwarded-for'] || 
+                 req.headers['x-real-ip'] || 
+                 req.connection.remoteAddress || 
+                 req.socket.remoteAddress ||
+                 ip;
+  
+  // GUNAKAN fungsi khusus untuk HTTP activity
+  updateESP32FromHTTP(realIP, `http_${action}`);
+  
+  logger.esp32(`ESP32 HTTP Check-in: ${action}`, {
+    team: team,
+    ip: realIP,
+    userAgent: req.headers['user-agent'],
+    timestamp: new Date().toISOString()
+  });
+  
+  res.json({ 
+    success: true, 
+    message: "ESP32 check-in received",
+    status: "CONTROLLER ONLINE",
+    timestamp: new Date().toISOString(),
+    yourIP: realIP,
+    esp32Status: esp32Status
+  });
+});
+
 // Debug endpoint untuk ESP32
 app.get("/debug/esp32", (req, res) => {
   const now = new Date();
@@ -727,6 +749,26 @@ app.get("/debug/esp32", (req, res) => {
   });
 });
 
+// Debug endpoint real-time untuk ESP32 - BARU
+app.get("/debug/esp32/realtime", (req, res) => {
+  const now = new Date();
+  const timeSinceLastActivity = lastEsp32Activity ? Math.floor((now - lastEsp32Activity) / 1000) : null;
+  
+  res.json({
+    realTime: now.toISOString(),
+    esp32Connected: esp32Connected,
+    lastActivity: lastEsp32Activity,
+    timeSinceLastActivity: timeSinceLastActivity + " seconds",
+    esp32Status: esp32Status,
+    willDisconnectIn: lastEsp32Activity ? (120 - timeSinceLastActivity) + " seconds" : "N/A",
+    config: {
+      timeoutThreshold: "120 seconds",
+      checkInterval: "30 seconds"
+    }
+  });
+});
+
+// ===== ROUTE UTAMA UPDATE =====
 app.get("/update", async (req, res) => {
   if (!req.query.team) {
     logger.error('Missing team parameter');
@@ -746,10 +788,12 @@ app.get("/update", async (req, res) => {
 
   logger.info('/update called', { team, add, isFirst, ip });
 
-  // Update ESP32 status jika request dari ESP32
+  // ===== PERBAIKAN BESAR: Update ESP32 status untuk SEMUA request dari ESP32 =====
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
-    updateESP32Status(true, null, ip, `buzzer_${isFirst ? 'first_press' : 'scoring'}`);
-    logger.esp32("ESP32 Activity", {
+    // GUNAKAN fungsi khusus untuk HTTP activity
+    updateESP32FromHTTP(ip, `buzzer_${isFirst ? 'first_press' : 'scoring'}`);
+    
+    logger.esp32("ESP32 Buzzer Activity", {
       type: "buzzer",
       team: team,
       action: isFirst ? "first_press" : "scoring",
@@ -1101,7 +1145,7 @@ async function startServer() {
     console.log(`Port: ${PORT}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log('───────────────────────────────────────────────────────')
+    console.log('───────────────────────────────────────────────────────');
   });
 }
 
