@@ -1,16 +1,17 @@
-﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
 let config = { plus: 5, minus: -2, timerDuration: 30 };
 let lockState = { locked: false, activeTeam: null };
 
-// ESP32 Status Tracking
+// ESP32 Status Tracking - DIPERBAIKI
 let esp32Status = {
   connected: false,
   lastActivity: null,
   socketId: null,
-  ip: null
+  ip: null,
+  connectionType: null
 };
 
 // Team Status Tracking
@@ -173,7 +174,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// Function untuk update ESP32 display
+// Function untuk update ESP32 display - DIPERBAIKI
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -186,7 +187,12 @@ function updateESP32Status(status) {
     if (esp32Status.connected) {
       esp32Badge.textContent = "TERHUBUNG";
       esp32Badge.className = "controller-badge connected";
-      esp32Connection.textContent = `ONLINE - CONTROLLER AKTIF ${esp32Status.ip ? '(' + esp32Status.ip + ')' : ''}`;
+      
+      let connectionText = `ONLINE - CONTROLLER AKTIF`;
+      if (esp32Status.ip) connectionText += ` (${esp32Status.ip})`;
+      if (esp32Status.connectionType) connectionText += ` - ${esp32Status.connectionType}`;
+      
+      esp32Connection.textContent = connectionText;
       esp32Connection.style.color = "#4caf50";
     } else {
       esp32Badge.textContent = "TERPUTUS";
@@ -199,8 +205,20 @@ function updateESP32Status(status) {
   if (esp32LastActivity) {
     if (esp32Status.lastActivity) {
       const activityDate = new Date(esp32Status.lastActivity);
-      esp32LastActivity.textContent = activityDate.toLocaleTimeString('id-ID') + 
-        " - " + activityDate.toLocaleDateString('id-ID');
+      const now = new Date();
+      const timeDiff = Math.floor((now - activityDate) / 1000);
+      
+      let timeText = activityDate.toLocaleTimeString('id-ID') + " - " + activityDate.toLocaleDateString('id-ID');
+      
+      if (timeDiff < 60) {
+        timeText += ` (${timeDiff} detik yang lalu)`;
+      } else if (timeDiff < 3600) {
+        timeText += ` (${Math.floor(timeDiff / 60)} menit yang lalu)`;
+      } else {
+        timeText += ` (${Math.floor(timeDiff / 3600)} jam yang lalu)`;
+      }
+      
+      esp32LastActivity.textContent = timeText;
     } else {
       esp32LastActivity.textContent = "Belum ada aktivitas";
     }
@@ -213,7 +231,7 @@ function updateESP32Status(status) {
   adminLogger.esp32('Status Updated', esp32Status);
 }
 
-// Function untuk ESP32 controls
+// Function untuk ESP32 controls - DIPERBAIKI
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -225,6 +243,9 @@ function initializeESP32Controls() {
   if (testBtn) {
     testBtn.addEventListener("click", testESP32Connection);
   }
+  
+  // Auto-refresh status setiap 5 detik
+  setInterval(refreshESP32Status, 5000);
 }
 
 function refreshESP32Status() {
@@ -248,18 +269,22 @@ function refreshESP32Status() {
 function testESP32Connection() {
   adminLogger.esp32('Connection test requested');
   
-  if (!esp32Status.connected) {
-    showNotification("ESP32 tidak terhubung! Periksa koneksi jaringan.", "error");
-    return;
-  }
-  
-  socket.emit("testConnection", {
-    type: "adminTest",
-    timestamp: new Date().toISOString(),
-    message: "Test connection from admin panel"
-  });
-  
-  showNotification("Test koneksi dikirim ke ESP32!", "success");
+  // Test dengan mengirim HTTP request ke ESP32 checkin endpoint
+  fetch('/esp32checkin?action=admin_test&team=0')
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      adminLogger.esp32('ESP32 checkin test successful', data);
+      showNotification("Test koneksi berhasil! ESP32 merespon.", "success");
+      // Refresh status setelah test
+      setTimeout(refreshESP32Status, 1000);
+    })
+    .catch(err => {
+      adminLogger.error('ESP32 connection test failed:', err);
+      showNotification("Test koneksi gagal! Periksa server.", "error");
+    });
 }
 
 // Konfigurasi dengan error handling
@@ -685,7 +710,7 @@ function updateTimerStatus(state, seconds) {
     adminLogger.info('Timer status updated', { state, seconds });
 }
 
-//Socket events untuk ESP32
+//Socket events untuk ESP32 - DIPERBAIKI
 socket.on("esp32Status", (status) => {
     adminLogger.event('esp32Status', status);
     updateESP32Status(status);
@@ -810,12 +835,14 @@ socket.on("reset", (scores) => {
     }
 });
 
-// Initialize
+// Initialize - DIPERBAIKI
 function initializeAdmin() {
     createTeamControls();
     initializeJuryControls();
     initializeESP32Controls();
     updateTimerStatus('TIDAK AKTIF', 0);
+    
+    // Load initial ESP32 status
     refreshESP32Status();
     
     Promise.all([
