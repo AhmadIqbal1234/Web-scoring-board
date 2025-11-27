@@ -1,4 +1,4 @@
-﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -281,8 +281,15 @@ function validateAudioFiles() {
   requiredFiles.forEach(file => {
     const filePath = join(audioDirFound, file);
     if (fs.existsSync(filePath)) {
-      foundFiles.push(file);
-      logger.audio(`Audio file found: ${file}`);
+      // Check if file is not empty (placeholder)
+      const stats = fs.statSync(filePath);
+      if (stats.size > 0) {
+        foundFiles.push(file);
+        logger.audio(`Audio file found: ${file} (${stats.size} bytes)`);
+      } else {
+        missingFiles.push(file);
+        logger.error(`Audio file is empty: ${file}`);
+      }
     } else {
       missingFiles.push(file);
       logger.error(`Audio file missing: ${file}`);
@@ -292,15 +299,6 @@ function validateAudioFiles() {
   logger.info(`Audio validation result: ${foundFiles.length}/${requiredFiles.length} files found`);
   if (missingFiles.length > 0) {
     logger.error(`Missing files: ${missingFiles.join(', ')}`);
-    
-    if (!isProduction) {
-      logger.info('Creating placeholder audio files for development...');
-      missingFiles.forEach(file => {
-        const placeholderPath = join(audioDirFound, file);
-        fs.writeFileSync(placeholderPath, '');
-        logger.info(`Created placeholder: ${file}`);
-      });
-    }
   }
   
   return audioDirFound;
@@ -379,10 +377,30 @@ function playBuzzerThenTeamAudio(team) {
   logger.audio(`Memulai sequence audio: buzzer -> ${teamAudioFile}`, { team });
   
   // Pertama, memutar audio buzzer
-  timerAudio.playPreTeamAudio(team);
+  const buzzerPlayed = timerAudio.playPreTeamAudio(team);
   
-  // Setelah buzzer selesai, memutar audio tim
-  // Client akan mengirim event "preTeamAudioFinished" ketika buzzer selesai
+  if (!buzzerPlayed) {
+    logger.error('Buzzer audio tidak dapat diputar, langsung memutar audio tim');
+    // Fallback: langsung memutar audio tim jika buzzer gagal
+    io.emit("playTeamAudio", {
+      team: team,
+      audioFile: teamAudioFile,
+      timerDuration: config.timerDuration
+    });
+    return;
+  }
+  
+  // Set timeout safety jika buzzer tidak mengirim callback - DIPERBAIKI: 3 detik
+  setTimeout(() => {
+    if (!isTimerRunning) {
+      logger.audio("Safety timeout: Memutar audio tim setelah 3 detik (buzzer mungkin gagal)");
+      io.emit("playTeamAudio", {
+        team: team,
+        audioFile: teamAudioFile,
+        timerDuration: config.timerDuration
+      });
+    }
+  }, 3000); // Diubah dari 2000 menjadi 3000 ms
 }
 
 // Start timer setelah audio selesai
@@ -484,6 +502,7 @@ app.use(express.static(publicDirFound));
 const audioDir = join(publicDirFound, "audio");
 if (fs.existsSync(audioDir)) {
   app.use('/audio', express.static(audioDir));
+  logger.info(`Audio static serving from: ${audioDir}`);
 } else {
   logger.error('Audio directory not found, creating...');
   fs.mkdirSync(audioDir, { recursive: true });
@@ -576,6 +595,65 @@ app.get("/disableAllTeams", (req, res) => {
 
 app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
+});
+
+// ===== ROUTES BARU UNTUK AUDIO SEQUENCE =====
+app.get("/triggerAudioSequence", (req, res) => {
+  const team = parseInt(req.query.team);
+  
+  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+    return res.status(400).json({ error: "Tim tidak valid" });
+  }
+  
+  logger.audio(`Manual audio sequence trigger for team ${team}`);
+  
+  // Langsung gunakan sequence yang lebih sederhana
+  const teamAudioFile = getTeamAudioFile(team);
+  
+  // 1. Mainkan buzzer terlebih dahulu
+  io.emit("playPreTeamAudio", {
+    team: team,
+    audioFile: 'buzzer.mp3'
+  });
+  
+  // 2. Set timeout untuk audio tim (fallback jika callback gagal)
+  setTimeout(() => {
+    if (!isTimerRunning) {
+      logger.audio(`Fallback: Memutar audio tim setelah 2.5 detik`);
+      io.emit("playTeamAudio", {
+        team: team,
+        audioFile: teamAudioFile,
+        timerDuration: config.timerDuration
+      });
+    }
+  }, 2500);
+  
+  res.json({ 
+    success: true, 
+    team: team, 
+    action: "audio_sequence_triggered",
+    sequence: ["buzzer.mp3", teamAudioFile]
+  });
+});
+
+// Test endpoint untuk sequence audio
+app.get("/testAudioSequence", (req, res) => {
+  const team = parseInt(req.query.team) || 1;
+  
+  logger.audio(`Testing audio sequence for team ${team}`);
+  
+  // Sequence: buzzer -> audio tim
+  io.emit("playPreTeamAudio", {
+    team: team,
+    audioFile: 'buzzer.mp3'
+  });
+  
+  res.json({ 
+    success: true, 
+    message: "Audio sequence test triggered",
+    team: team,
+    sequence: "buzzer -> team audio"
+  });
 });
 
 app.get("/update", async (req, res) => {
@@ -685,7 +763,7 @@ app.get("/audioFinished", (req, res) => {
 app.get("/preTeamAudioFinished", (req, res) => {
   const team = parseInt(req.query.team);
   
-  logger.info("Pre-team audio (buzzer) finished", { team });
+  logger.info("Pre-team audio (buzzer) finished via HTTP", { team });
   
   if (team) {
     const teamAudioFile = getTeamAudioFile(team);
@@ -697,7 +775,7 @@ app.get("/preTeamAudioFinished", (req, res) => {
       timerDuration: config.timerDuration
     });
     
-    logger.audio(`Memutar "${teamAudioFile}" setelah buzzer selesai`);
+    logger.audio(`Memutar "${teamAudioFile}" setelah buzzer selesai (HTTP callback)`);
   }
   
   res.json({ 
@@ -714,15 +792,22 @@ app.get("/triggerAudio", (req, res) => {
     return res.status(400).json({ error: "Tim tidak valid" });
   }
   
-  const audioFile = getTeamAudioFile(team);
-  io.emit("playTeamAudio", {
-    team: team,
-    audioFile: audioFile,
-    timerDuration: config.timerDuration
-  });
+  // Test: langsung memutar sequence buzzer -> team audio
+  playBuzzerThenTeamAudio(team);
   
   logger.audio(`Manual audio trigger for team ${team}`);
-  res.json({ success: true, team: team, audioFile: audioFile });
+  res.json({ success: true, team: team, action: "buzzer_sequence_triggered" });
+});
+
+app.get("/testBuzzer", (req, res) => {
+  // Test endpoint untuk memastikan buzzer.mp3 bisa diputar
+  io.emit("playPreTeamAudio", {
+    team: 1,
+    audioFile: 'buzzer.mp3'
+  });
+  
+  logger.audio("Test buzzer audio triggered");
+  res.json({ success: true, message: "Buzzer test triggered", file: "buzzer.mp3" });
 });
 
 app.get("/unlock", (req, res) => {
@@ -869,7 +954,7 @@ io.on("connection", (socket) => {
     socket.emit("timerStart", { duration: timeRemaining });
   }
 
-  // Event handler untuk pre-team audio finished
+  // Event handler untuk pre-team audio finished - DIPERBAIKI
   socket.on("preTeamAudioFinished", (data) => {
     const team = data.team;
     logger.info("Pre-team audio finished via Socket.IO", { team });
@@ -912,6 +997,11 @@ async function startServer() {
     console.log(`Port: ${PORT}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
+    console.log('───────────────────────────────────────────────────────');
+    console.log('TEST ENDPOINTS:');
+    console.log(`Test Buzzer: http://localhost:${PORT}/testBuzzer`);
+    console.log(`Test Audio Sequence: http://localhost:${PORT}/testAudioSequence?team=1`);
+    console.log(`Trigger Audio Sequence: http://localhost:${PORT}/triggerAudioSequence?team=1`);
     console.log('───────────────────────────────────────────────────────\n');
   });
 }

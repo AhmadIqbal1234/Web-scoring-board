@@ -1,4 +1,4 @@
-﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -389,6 +389,30 @@ const audioTim = new SistemAudioTim();
 const timerAudio = new TimerAudioSystem();
 const juryAudio = new JuryAudioSystem();
 
+// ===== HANDLER BARU UNTUK PRE-TEAM AUDIO (BUZZER) =====
+
+// Function untuk memutar audio tim langsung
+function playTeamAudioDirectly(team) {
+    const teamAudioFile = getTeamAudioFile(team);
+    console.log('Memutar audio tim langsung:', teamAudioFile);
+    
+    const audioSuccess = audioTim.putarAudio(team, {
+        action: "startTimer",
+        team: team,
+        timerDuration: 30 // default duration
+    });
+    
+    if (!audioSuccess) {
+        console.warn('Audio playback failed, using fallback');
+        setTimeout(() => {
+            fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
+                .then(r => r.json())
+                .then(data => console.log('Fallback result:', data))
+                .catch(e => console.error('Fallback failed:', e));
+        }, 1000);
+    }
+}
+
 // TIMER FUNCTIONS
 function updateTimerDisplay(seconds) {
     const timerEl = document.querySelector('.timer');
@@ -591,6 +615,43 @@ socket.on("disconnect", () => {
     if (liveIndicator) {
         liveIndicator.style.background = '#ff4444';
         liveIndicator.textContent = '● OFFLINE - DISCONNECTED';
+    }
+});
+
+// ===== HANDLER UNTUK PRE-TEAM AUDIO (BUZZER) =====
+socket.on("playPreTeamAudio", (data) => {
+    console.log('PLAY PRE-TEAM AUDIO (BUZZER):', data);
+    const { team, audioFile } = data;
+
+    console.log(`Memutar buzzer audio: ${audioFile} untuk Tim ${getTeamLetter(team)}`);
+    
+    // Memutar audio buzzer
+    const buzzerAudio = new Audio(`/audio/${audioFile}`);
+    
+    buzzerAudio.onerror = (e) => {
+        console.error('Error memutar buzzer audio:', e);
+        // Jika buzzer gagal, langsung lanjut ke audio tim
+        setTimeout(() => {
+            playTeamAudioDirectly(team);
+        }, 500);
+    };
+    
+    buzzerAudio.onended = () => {
+        console.log('Buzzer audio selesai, melanjutkan ke audio tim');
+        // Setelah buzzer selesai, mainkan audio tim
+        playTeamAudioDirectly(team);
+        
+        // Beri tahu server bahwa buzzer selesai (optional)
+        socket.emit("preTeamAudioFinished", { team: team });
+    };
+    
+    const playPromise = buzzerAudio.play();
+    if (playPromise !== undefined) {
+        playPromise.catch(error => {
+            console.error('Gagal memutar buzzer audio:', error);
+            // Fallback: langsung ke audio tim
+            playTeamAudioDirectly(team);
+        });
     }
 });
 
