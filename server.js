@@ -113,7 +113,8 @@ let esp32Status = {
   socketId: null,
   ip: null,
   lastCheckin: null,
-  connectionType: null
+  connectionType: null,
+  lastBroadcast: null
 };
 
 const logger = {
@@ -296,8 +297,11 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== ESP32 STATUS SYSTEM - PERSISTENT =====
+// ===== ESP32 STATUS SYSTEM - OPTIMIZED =====
 function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
+  const previousStatus = esp32Status.connected;
+  const previousIP = esp32Status.ip;
+  
   if (connected) {
     esp32Status.connected = true;
     esp32Status.lastActivity = new Date();
@@ -319,18 +323,51 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     });
     
   } else {
-    if (activityType === "esp32_shutdown") {
+    if (activityType === "esp32_shutdown" || activityType === "socket_disconnect") {
       esp32Status.connected = false;
       esp32Status.connectionType = "disconnected";
       logger.esp32("ESP32 Explicit Disconnect", { reason: activityType });
     }
   }
   
-  io.emit("esp32Status", esp32Status);
+  // HANYA broadcast jika status berubah atau 30 detik telah berlalu sejak broadcast terakhir
+  const shouldBroadcast = 
+    previousStatus !== esp32Status.connected || 
+    previousIP !== esp32Status.ip ||
+    !esp32Status.lastBroadcast || 
+    (Date.now() - esp32Status.lastBroadcast.getTime() > 30000);
+  
+  if (shouldBroadcast) {
+    esp32Status.lastBroadcast = new Date();
+    io.emit("esp32Status", esp32Status);
+    
+    if (previousStatus !== esp32Status.connected) {
+      logger.esp32(`ESP32 Status Changed: ${previousStatus ? 'ONLINE' : 'OFFLINE'} -> ${esp32Status.connected ? 'ONLINE' : 'OFFLINE'}`);
+    }
+  }
 }
 
 function updateESP32FromHTTP(ip, activityType = "http_activity") {
-  updateESP32Status(true, null, ip, activityType);
+  // Batasi update terlalu sering dari HTTP requests
+  const now = Date.now();
+  const timeSinceLastActivity = esp32Status.lastActivity ? now - esp32Status.lastActivity.getTime() : Infinity;
+  
+  // Hanya update jika:
+  // 1. Status sebelumnya OFFLINE, ATAU
+  // 2. Lebih dari 10 detik sejak aktivitas terakhir
+  if (!esp32Status.connected || timeSinceLastActivity > 10000) {
+    updateESP32Status(true, null, ip, activityType);
+  } else {
+    // Silent update tanpa broadcast untuk aktivitas rutin
+    esp32Status.lastActivity = new Date();
+    esp32Status.lastCheckin = new Date();
+    
+    // Log saja tanpa broadcast
+    logger.esp32(`ESP32 Silent Heartbeat - ${activityType}`, {
+      ip: ip,
+      timestamp: new Date().toISOString()
+    });
+  }
 }
 
 // Monitoring only - no auto-disconnect
@@ -574,19 +611,21 @@ app.get("/esp32checkin", (req, res) => {
   
   updateESP32FromHTTP(realIP, `http_${action}`);
   
-  logger.esp32(`ESP32 Persistent Check-in: ${action}`, {
-    team: team,
-    ip: realIP,
-    timestamp: new Date().toISOString()
-  });
+  // Hanya log jika bukan heartbeat rutin
+  if (action !== 'heartbeat') {
+    logger.esp32(`ESP32 Check-in: ${action}`, {
+      team: team,
+      ip: realIP,
+      timestamp: new Date().toISOString()
+    });
+  }
   
   res.json({ 
     success: true, 
-    message: "ESP32 persistent check-in received",
-    status: "CONTROLLER ONLINE - PERSISTENT",
+    message: "ESP32 check-in received",
+    status: esp32Status.connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
     timestamp: new Date().toISOString(),
-    yourIP: realIP,
-    esp32Status: esp32Status
+    yourIP: realIP
   });
 });
 
@@ -624,8 +663,12 @@ app.get("/update", async (req, res) => {
 
   logger.info('/update called', { team, add, isFirst, ip });
 
+  // Optimized ESP32 status update - hanya update jika perlu
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
-    updateESP32FromHTTP(ip, `buzzer_${isFirst ? 'first_press' : 'scoring'}`);
+    const activityType = `buzzer_${isFirst ? 'first_press' : 'scoring'}`;
+    
+    // Untuk aktivitas buzzer, SELALU update status (karena ini event penting)
+    updateESP32Status(true, null, ip, activityType);
     
     logger.esp32("ESP32 Buzzer Activity", {
       type: "buzzer",
