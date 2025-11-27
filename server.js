@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 8080;
 const TEAM_COUNT = 12;
 const isProduction = process.env.NODE_ENV === 'production';
 
-// ===== SMART SECURITY MIDDLEWARE =====
+// ===== SECURITY MIDDLEWARE =====
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -33,7 +33,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// ===== SMART RATE LIMITING - FIXED IP DETECTION =====
+// ===== RATE LIMITING =====
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: (req) => {
@@ -41,10 +41,6 @@ const limiter = rateLimit({
                   req.connection.remoteAddress || 
                   req.socket.remoteAddress ||
                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
-    
-    if (!isProduction) {
-      console.log(`[RATE LIMIT] Client IP: ${clientIP}, URL: ${req.url}`);
-    }
     
     const whitelistIPs = [
       '192.168.1.',
@@ -69,9 +65,6 @@ const limiter = rateLimit({
     const isWhitelistedURL = whitelistURLs.some(url => req.url.startsWith(url));
     
     if (isWhitelistedIP || isWhitelistedURL) {
-      if (!isProduction) {
-        console.log(`[RATE LIMIT] Whitelisted - IP: ${clientIP}, URL: ${req.url}`);
-      }
       return 10000;
     }
     
@@ -90,7 +83,7 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-// CORS setup untuk semua environment
+// CORS setup
 const io = new Server(http, {
   cors: {
     origin: isProduction 
@@ -113,13 +106,7 @@ let isTimerRunning = false;
 let audioPlaying = false;
 let audioFinishTimeout = null;
 
-// ESP32 Status Tracking - DIPERBAIKI BESAR
-let esp32Connected = false;
-let lastEsp32Activity = null;
-let esp32SocketId = null;
-let esp32LastIP = null;
-
-// ESP32 Status Object yang lengkap
+// ESP32 Status Tracking
 let esp32Status = {
   connected: false,
   lastActivity: null,
@@ -171,7 +158,6 @@ class TimerAudioSystem {
       wrong: 'salah.mp3'
     };
 
-    // Audio yang akan diputar sebelum audio tim
     this.preTeamAudio = 'buzzer.mp3';
   }
 
@@ -197,7 +183,6 @@ class TimerAudioSystem {
     }
   }
 
-  // Method untuk memutar audio sebelum audio tim
   playPreTeamAudio(team) {
     if (this.preTeamAudio) {
       io.emit("playPreTeamAudio", {
@@ -249,7 +234,7 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// ===== PERBAIKAN: Validasi file audio - FIXED possibleDirs =====
+// Validasi file audio
 function validateAudioFiles() {
   const possibleDirs = [
     join(process.cwd(), "public", "audio"),
@@ -283,7 +268,6 @@ function validateAudioFiles() {
   ];
   
   logger.info("Validating audio files...");
-  logger.info(`Audio directory: ${audioDirFound}`);
   
   let missingFiles = [];
   let foundFiles = [];
@@ -294,7 +278,6 @@ function validateAudioFiles() {
       const stats = fs.statSync(filePath);
       if (stats.size > 0) {
         foundFiles.push(file);
-        logger.audio(`Audio file found: ${file} (${stats.size} bytes)`);
       } else {
         missingFiles.push(file);
         logger.error(`Audio file is empty: ${file}`);
@@ -313,94 +296,55 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== ESP32 STATUS SYSTEM - DIPERBAIKI BESAR =====
-
-// Function khusus untuk HTTP activity dari ESP32 - BARU
-function updateESP32FromHTTP(ip, activityType = "http_activity") {
-  // SELALU set connected untuk HTTP activity
-  esp32Connected = true;
-  lastEsp32Activity = new Date();
-  esp32Status.connected = true;
-  esp32Status.lastActivity = lastEsp32Activity;
-  esp32Status.lastCheckin = new Date();
-  esp32Status.connectionType = activityType;
-  esp32Status.ip = ip;
-  
-  logger.esp32(`ESP32 HTTP Activity - ${activityType}`, {
-    ip: ip,
-    timestamp: lastEsp32Activity.toISOString()
-  });
-  
-  // Broadcast status update
-  io.emit("esp32Status", esp32Status);
-}
-
-// Function untuk update ESP32 status dan broadcast - DIPERBAIKI
+// ===== ESP32 STATUS SYSTEM - PERSISTENT =====
 function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
-  const previousStatus = esp32Connected;
-  esp32Connected = connected;
-  
   if (connected) {
-    lastEsp32Activity = new Date();
-    esp32Status.lastActivity = lastEsp32Activity;
+    esp32Status.connected = true;
+    esp32Status.lastActivity = new Date();
     esp32Status.lastCheckin = new Date();
     esp32Status.connectionType = activityType;
     
     if (socket) {
-      esp32SocketId = socket.id;
       esp32Status.socketId = socket.id;
     }
     
     if (ip) {
-      esp32LastIP = ip;
       esp32Status.ip = ip;
     }
     
-    esp32Status.connected = true;
-    
-    logger.esp32(`ESP32 Controller Connected - ${activityType}`, {
-      socketId: esp32SocketId,
-      ip: esp32LastIP,
-      timestamp: lastEsp32Activity.toISOString(),
-      activityType: activityType
+    logger.esp32(`ESP32 Activity - ${activityType}`, {
+      ip: ip,
+      socketId: socket ? socket.id : 'HTTP',
+      timestamp: esp32Status.lastActivity.toISOString()
     });
+    
   } else {
-    // HANYA update status disconnected jika benar-benar perlu
-    if (previousStatus && activityType !== "http_request") {
-      logger.esp32("ESP32 Controller Disconnected", {
-        socketId: esp32SocketId,
-        timestamp: new Date().toISOString(),
-        reason: activityType
-      });
+    if (activityType === "esp32_shutdown") {
       esp32Status.connected = false;
       esp32Status.connectionType = "disconnected";
+      logger.esp32("ESP32 Explicit Disconnect", { reason: activityType });
     }
   }
   
-  // SELALU broadcast status terbaru
   io.emit("esp32Status", esp32Status);
-  
-  // Log perubahan status
-  if (previousStatus !== connected && connected) {
-    logger.esp32(`ESP32 Status Changed: DISCONNECTED -> CONNECTED (${activityType})`);
-  }
 }
 
-// Health check system untuk ESP32 - PERBAIKAN: Lebih toleran
+function updateESP32FromHTTP(ip, activityType = "http_activity") {
+  updateESP32Status(true, null, ip, activityType);
+}
+
+// Monitoring only - no auto-disconnect
 setInterval(() => {
-  if (esp32Connected && lastEsp32Activity) {
-    const timeSinceLastActivity = Date.now() - lastEsp32Activity.getTime();
-    const timeoutThreshold = 120000; // 2 MENIT (diperpanjang jauh)
-    
-    if (timeSinceLastActivity > timeoutThreshold) {
-      logger.esp32("ESP32 auto-disconnect due to extended inactivity", {
-        lastActivity: lastEsp32Activity,
-        inactiveTime: timeSinceLastActivity
+  if (esp32Status.connected && esp32Status.lastActivity) {
+    const timeSinceLastActivity = Date.now() - esp32Status.lastActivity.getTime();
+    if (timeSinceLastActivity > 120000) {
+      logger.esp32("INFO: ESP32 no recent activity, but connection maintained", {
+        lastActivity: esp32Status.lastActivity,
+        inactiveMinutes: Math.floor(timeSinceLastActivity / 60000)
       });
-      updateESP32Status(false, null, null, "extended_inactivity_timeout");
     }
   }
-}, 30000); // Check setiap 30 detik
+}, 60000);
 
 // TIMER SYSTEM
 function startTimer(activeTeam = null) {
@@ -474,12 +418,10 @@ function playBuzzerThenTeamAudio(team) {
   
   logger.audio(`Memulai sequence audio: buzzer -> ${teamAudioFile}`, { team });
   
-  // Pertama, memutar audio buzzer
   const buzzerPlayed = timerAudio.playPreTeamAudio(team);
   
   if (!buzzerPlayed) {
     logger.error('Buzzer audio tidak dapat diputar, langsung memutar audio tim');
-    // Fallback: langsung memutar audio tim jika buzzer gagal
     io.emit("playTeamAudio", {
       team: team,
       audioFile: teamAudioFile,
@@ -488,7 +430,6 @@ function playBuzzerThenTeamAudio(team) {
     return;
   }
   
-  // Set timeout safety jika buzzer tidak mengirim callback
   setTimeout(() => {
     if (!isTimerRunning) {
       logger.audio("Safety timeout: Memutar audio tim setelah 3 detik (buzzer mungkin gagal)");
@@ -513,7 +454,7 @@ function startTimerAfterAudio(team) {
   }, 5000);
 }
 
-// ===== STATIC FILE SERVING dengan path yang robust =====
+// ===== STATIC FILE SERVING =====
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
   join(__dirname, "public"),
@@ -547,28 +488,12 @@ if (fs.existsSync(audioDir)) {
   app.use('/audio', express.static(audioDir));
 }
 
-// Favicon route
-app.get('/tts/android-chrome-192x192.png', (req, res) => {
-  const faviconPath = join(publicDirFound, 'tts', 'android-chrome-192x192.png');
-  if (fs.existsSync(faviconPath)) {
-    res.sendFile(faviconPath);
-  } else {
-    const fallbackPath = join(publicDirFound, 'android-chrome-192x192.png');
-    if (fs.existsSync(fallbackPath)) {
-      res.sendFile(fallbackPath);
-    } else {
-      res.status(404).send('Favicon not found');
-    }
-  }
-});
-
 // Root route untuk health check
 app.get("/", (req, res) => {
   res.json({ 
     status: "Quiz Scoring System API", 
     version: "2.0.0",
     environment: isProduction ? "production" : "development",
-    rateLimiting: "Smart limits enabled",
     ready: true
   });
 });
@@ -635,93 +560,30 @@ app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
 });
 
-// ===== ROUTES BARU UNTUK AUDIO SEQUENCE =====
-app.get("/triggerAudioSequence", (req, res) => {
-  const team = parseInt(req.query.team);
-  
-  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-    return res.status(400).json({ error: "Tim tidak valid" });
-  }
-  
-  logger.audio(`Manual audio sequence trigger for team ${team}`);
-  
-  const teamAudioFile = getTeamAudioFile(team);
-  
-  // 1. Mainkan buzzer terlebih dahulu
-  io.emit("playPreTeamAudio", {
-    team: team,
-    audioFile: 'buzzer.mp3'
-  });
-  
-  // 2. Set timeout untuk audio tim (fallback jika callback gagal)
-  setTimeout(() => {
-    if (!isTimerRunning) {
-      logger.audio(`Fallback: Memutar audio tim setelah 2.5 detik`);
-      io.emit("playTeamAudio", {
-        team: team,
-        audioFile: teamAudioFile,
-        timerDuration: config.timerDuration
-      });
-    }
-  }, 2500);
-  
-  res.json({ 
-    success: true, 
-    team: team, 
-    action: "audio_sequence_triggered",
-    sequence: ["buzzer.mp3", teamAudioFile]
-  });
-});
-
-// Test endpoint untuk sequence audio
-app.get("/testAudioSequence", (req, res) => {
-  const team = parseInt(req.query.team) || 1;
-  
-  logger.audio(`Testing audio sequence for team ${team}`);
-  
-  // Sequence: buzzer -> audio tim
-  io.emit("playPreTeamAudio", {
-    team: team,
-    audioFile: 'buzzer.mp3'
-  });
-  
-  res.json({ 
-    success: true, 
-    message: "Audio sequence test triggered",
-    team: team,
-    sequence: "buzzer -> team audio"
-  });
-});
-
 // ===== ROUTES UNTUK ESP32 =====
-
-// ROUTE UNTUK ESP32 CHECK-IN (HTTP Based) - DIPERBAIKI BESAR
 app.get("/esp32checkin", (req, res) => {
   const action = req.query.action || 'heartbeat';
   const team = req.query.team;
   const ip = req.ip || req.connection.remoteAddress;
   
-  // Dapatkan IP asli
   const realIP = req.headers['x-forwarded-for'] || 
                  req.headers['x-real-ip'] || 
                  req.connection.remoteAddress || 
                  req.socket.remoteAddress ||
                  ip;
   
-  // GUNAKAN fungsi khusus untuk HTTP activity
   updateESP32FromHTTP(realIP, `http_${action}`);
   
-  logger.esp32(`ESP32 HTTP Check-in: ${action}`, {
+  logger.esp32(`ESP32 Persistent Check-in: ${action}`, {
     team: team,
     ip: realIP,
-    userAgent: req.headers['user-agent'],
     timestamp: new Date().toISOString()
   });
   
   res.json({ 
     success: true, 
-    message: "ESP32 check-in received",
-    status: "CONTROLLER ONLINE",
+    message: "ESP32 persistent check-in received",
+    status: "CONTROLLER ONLINE - PERSISTENT",
     timestamp: new Date().toISOString(),
     yourIP: realIP,
     esp32Status: esp32Status
@@ -734,37 +596,11 @@ app.get("/debug/esp32", (req, res) => {
   res.json({
     realTime: now.toISOString(),
     esp32Status: esp32Status,
-    connected: esp32Connected,
-    lastActivity: lastEsp32Activity,
-    socketId: esp32SocketId,
-    ip: esp32LastIP,
-    timeSinceLastActivity: lastEsp32Activity ? Math.floor((now - lastEsp32Activity) / 1000) + " seconds" : "N/A",
-    activeConnections: io.engine.clientsCount,
-    allSockets: Array.from(io.sockets.sockets.values()).map(socket => ({
-      id: socket.id,
-      ip: socket.handshake.address,
-      clientType: socket.handshake.query.clientType,
-      connectedAt: socket.handshake.time
-    }))
-  });
-});
-
-// Debug endpoint real-time untuk ESP32 - BARU
-app.get("/debug/esp32/realtime", (req, res) => {
-  const now = new Date();
-  const timeSinceLastActivity = lastEsp32Activity ? Math.floor((now - lastEsp32Activity) / 1000) : null;
-  
-  res.json({
-    realTime: now.toISOString(),
-    esp32Connected: esp32Connected,
-    lastActivity: lastEsp32Activity,
-    timeSinceLastActivity: timeSinceLastActivity + " seconds",
-    esp32Status: esp32Status,
-    willDisconnectIn: lastEsp32Activity ? (120 - timeSinceLastActivity) + " seconds" : "N/A",
-    config: {
-      timeoutThreshold: "120 seconds",
-      checkInterval: "30 seconds"
-    }
+    connected: esp32Status.connected,
+    lastActivity: esp32Status.lastActivity,
+    socketId: esp32Status.socketId,
+    ip: esp32Status.ip,
+    timeSinceLastActivity: esp32Status.lastActivity ? Math.floor((now - esp32Status.lastActivity) / 1000) + " seconds" : "N/A"
   });
 });
 
@@ -788,9 +624,7 @@ app.get("/update", async (req, res) => {
 
   logger.info('/update called', { team, add, isFirst, ip });
 
-  // ===== PERBAIKAN BESAR: Update ESP32 status untuk SEMUA request dari ESP32 =====
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
-    // GUNAKAN fungsi khusus untuk HTTP activity
     updateESP32FromHTTP(ip, `buzzer_${isFirst ? 'first_press' : 'scoring'}`);
     
     logger.esp32("ESP32 Buzzer Activity", {
@@ -818,9 +652,7 @@ app.get("/update", async (req, res) => {
     io.emit("lockstate", lockState);
     io.emit("buzz", { team });
     
-    // Memutar sequence audio: buzzer -> audio tim
     playBuzzerThenTeamAudio(team);
-    
     startTimerAfterAudio(team);
   }
 
@@ -875,7 +707,6 @@ app.get("/audioFinished", (req, res) => {
   });
 });
 
-// Route baru untuk menangani selesainya pre-team audio (buzzer)
 app.get("/preTeamAudioFinished", (req, res) => {
   const team = parseInt(req.query.team);
   
@@ -884,7 +715,6 @@ app.get("/preTeamAudioFinished", (req, res) => {
   if (team) {
     const teamAudioFile = getTeamAudioFile(team);
     
-    // Setelah buzzer selesai, memutar audio tim
     io.emit("playTeamAudio", {
       team: team,
       audioFile: teamAudioFile,
@@ -908,22 +738,10 @@ app.get("/triggerAudio", (req, res) => {
     return res.status(400).json({ error: "Tim tidak valid" });
   }
   
-  // Test: langsung memutar sequence buzzer -> team audio
   playBuzzerThenTeamAudio(team);
   
   logger.audio(`Manual audio trigger for team ${team}`);
   res.json({ success: true, team: team, action: "buzzer_sequence_triggered" });
-});
-
-app.get("/testBuzzer", (req, res) => {
-  // Test endpoint untuk memastikan buzzer.mp3 bisa diputar
-  io.emit("playPreTeamAudio", {
-    team: 1,
-    audioFile: 'buzzer.mp3'
-  });
-  
-  logger.audio("Test buzzer audio triggered");
-  res.json({ success: true, message: "Buzzer test triggered", file: "buzzer.mp3" });
 });
 
 app.get("/unlock", (req, res) => {
@@ -975,7 +793,7 @@ app.get("/config", (req, res) => {
 app.get("/esp32status", (req, res) => {
   const now = new Date();
   const statusInfo = {
-    connected: esp32Connected,
+    connected: esp32Status.connected,
     lastActivity: esp32Status.lastActivity,
     lastCheckin: esp32Status.lastCheckin,
     socketId: esp32Status.socketId,
@@ -989,7 +807,7 @@ app.get("/esp32status", (req, res) => {
       "WiFi Manager Configuration",
       "Audio Trigger Support"
     ],
-    status: esp32Connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
+    status: esp32Status.connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
     uptime: esp32Status.lastActivity ? Math.floor((now - esp32Status.lastActivity) / 1000) + " seconds" : "N/A",
     realTime: now.toISOString()
   };
@@ -1015,18 +833,7 @@ app.get("/health", (req, res) => {
       disabledCount: teamToggleState.filter(state => !state).length
     },
     connections: io.engine.clientsCount,
-    environment: isProduction ? "production" : "development",
-    rateLimiting: "Smart limits active",
-    services: {
-      audio: "Audio File System - File per Tim & Timer Countdown & Juri",
-      timer: "START AFTER AUDIO - Timer mulai setelah audio selesai",
-      esp32: "ESP32 Master Controller with Buzzer & LED System",
-      safety: "5-second safety timeout implemented",
-      jury: "Audio feedback untuk tombol juri (benar/salah)",
-      tracking: "ESP32 HTTP Heartbeat System Active",
-      teamToggle: "Team toggle controls - Enable/disable individual teams",
-      buzzer: "BUZZER FIRST - Memutar buzzer.mp3 sebelum audio tim"
-    }
+    environment: isProduction ? "production" : "development"
   });
 });
 
@@ -1044,7 +851,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket connection dengan ESP32 tracking - DIPERBAIKI
+// Socket connection
 io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
@@ -1057,7 +864,6 @@ io.on("connection", (socket) => {
     userAgent: userAgent
   });
 
-  // Deteksi ESP32 berdasarkan IP pattern atau clientType
   const isESP32 = clientType === 'esp32' || 
                   clientIP.includes('192.168.1.') || 
                   clientIP.includes('172.') || 
@@ -1074,7 +880,6 @@ io.on("connection", (socket) => {
       clientType: clientType
     });
     
-    // Handle ESP32 specific events
     socket.on("esp32Heartbeat", (data) => {
       updateESP32Status(true, socket, clientIP, "heartbeat");
       logger.esp32("ESP32 Heartbeat received", data);
@@ -1090,13 +895,12 @@ io.on("connection", (socket) => {
   socket.emit("config", config);
   socket.emit("lockstate", lockState);
   socket.emit("teamToggleState", teamToggleState);
-  socket.emit("esp32Status", esp32Status); // Kirim status ESP32 saat connect
+  socket.emit("esp32Status", esp32Status);
   
   if (isTimerRunning) {
     socket.emit("timerStart", { duration: timeRemaining });
   }
 
-  // Event handler untuk pre-team audio finished
   socket.on("preTeamAudioFinished", (data) => {
     const team = data.team;
     logger.info("Pre-team audio finished via Socket.IO", { team });
@@ -1104,7 +908,6 @@ io.on("connection", (socket) => {
     if (team) {
       const teamAudioFile = getTeamAudioFile(team);
       
-      // Setelah buzzer selesai, memutar audio tim
       io.emit("playTeamAudio", {
         team: team,
         audioFile: teamAudioFile,
@@ -1139,13 +942,13 @@ async function startServer() {
   const audioDir = validateAudioFiles();
   
   http.listen(PORT, async () => {
-    console.log('\nSISTEM KUIS - Ridwan and Team');
-    console.log('───────────────────────────────────────────────────────');
+    console.log('SISTEM KUIS - Ridwan and Team');
+    console.log('----------------------------------------');
     console.log(`Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     console.log(`Port: ${PORT}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log('───────────────────────────────────────────────────────');
+    console.log('----------------------------------------');
   });
 }
 
