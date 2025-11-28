@@ -274,10 +274,11 @@ function refreshESP32Status() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     })
-    .then(data => {
-      updateESP32Status(data);
-      showNotification("Status ESP32 diperbarui!", "success");
-    })
+
+    // .then(data => {
+    //   updateESP32Status(data);
+    //   showNotification("Status ESP32 diperbarui!", "success");
+    // })
     .catch(err => {
       adminLogger.error('ESP32 status refresh error:', err);
       showNotification("Gagal memuat status ESP32!", "error");
