@@ -1,4 +1,4 @@
-﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -413,7 +413,7 @@ function playTeamAudioDirectly(team) {
     }
 }
 
-// ===== IMPROVED TIMER FUNCTIONS =====
+// TIMER FUNCTIONS
 function updateTimerDisplay(seconds) {
     const timerEl = document.querySelector('.timer');
     if (!timerEl) {
@@ -425,12 +425,8 @@ function updateTimerDisplay(seconds) {
     const secs = seconds % 60;
     timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     
-    timerEl.classList.remove('warning', 'critical', 'expired');
-    
-    if (seconds === 0) {
-        timerEl.classList.add('expired');
-        timerEl.textContent = '00:00';
-    } else if (seconds <= 10) {
+    timerEl.classList.remove('warning', 'critical');
+    if (seconds <= 10) {
         timerEl.classList.add('critical');
     } else if (seconds <= 30) {
         timerEl.classList.add('warning');
@@ -441,7 +437,7 @@ function resetTimerDisplay() {
     const timerEl = document.querySelector('.timer');
     if (timerEl) {
         timerEl.textContent = '00:00';
-        timerEl.classList.remove('warning', 'critical', 'expired');
+        timerEl.classList.remove('warning', 'critical');
     }
 }
 
@@ -484,12 +480,6 @@ function resetDisplay() {
 // Helper tim
 function getTeamLetter(index) {
     return String.fromCharCode(65 + index - 1);
-}
-
-// Get audio file name untuk tim
-function getTeamAudioFile(teamNumber) {
-  const teamLetter = getTeamLetter(teamNumber);
-  return `Tim ${teamLetter}.mp3`;
 }
 
 // Update tampilan berdasarkan status toggle tim
@@ -811,42 +801,6 @@ socket.on("playJuryAudio", (data) => {
     }
 });
 
-// ===== IMPROVED TIMER EVENTS =====
-socket.on("timerStart", (data) => {
-    console.log('Timer start:', data);
-    if (data.duration) {
-        updateTimerDisplay(data.duration);
-    }
-});
-
-socket.on("timerUpdate", (data) => {
-    if (data.timeRemaining !== undefined) {
-        updateTimerDisplay(data.timeRemaining);
-    }
-});
-
-socket.on("timerEnd", () => {
-    console.log('Timer end received - resetting display');
-    updateTimerDisplay(0);
-    
-    // Force reset display when timer ends
-    setTimeout(() => {
-        resetDisplay();
-    }, 500);
-});
-
-socket.on("systemUnlocked", (data) => {
-    console.log('System unlocked event received:', data);
-    resetDisplay();
-    resetTimerDisplay();
-});
-
-socket.on("timerReset", () => {
-    console.log('Timer reset received');
-    resetTimerDisplay();
-    resetDisplay();
-});
-
 // Pesan AI
 let aiMessageTimeout;
 
@@ -868,6 +822,30 @@ socket.on("aiMessage", (data) => {
     aiMessageTimeout = setTimeout(() => {
         aiMessageEl.classList.remove("show");
     }, 4000);
+});
+
+// TIMER EVENTS FROM SERVER
+socket.on("timerStart", (data) => {
+    console.log('Timer start:', data);
+    if (data.duration) {
+        updateTimerDisplay(data.duration);
+    }
+});
+
+socket.on("timerUpdate", (data) => {
+    if (data.timeRemaining !== undefined) {
+        updateTimerDisplay(data.timeRemaining);
+    }
+});
+
+socket.on("timerEnd", () => {
+    console.log('Timer end received');
+    updateTimerDisplay(0);
+});
+
+socket.on("timerReset", () => {
+    console.log('Timer reset received');
+    resetTimerDisplay();
 });
 
 // Initialize
