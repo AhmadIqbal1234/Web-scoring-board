@@ -383,7 +383,7 @@ setInterval(() => {
   }
 }, 60000);
 
-// TIMER SYSTEM
+// ===== IMPROVED TIMER SYSTEM =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.info("Timer already running, ignoring start request");
@@ -412,6 +412,8 @@ function startTimer(activeTeam = null) {
 
     if (timeRemaining <= 0) {
       stopTimer(currentActiveTeam);
+      // Force unlock system when timer reaches 0
+      forceUnlockSystem();
     }
   }, 1000);
 }
@@ -425,9 +427,6 @@ function stopTimer(activeTeam = null) {
   isTimerRunning = false;
   io.emit("timerEnd");
 
-  lockState = { locked: false, activeTeam: null };
-  io.emit("lockstate", lockState);
-  
   logger.info("Timer stopped", { activeTeam });
 }
 
@@ -448,6 +447,42 @@ function resetTimer() {
   
   logger.info("Timer reset");
 }
+
+// ===== FORCE UNLOCK SYSTEM =====
+function forceUnlockSystem() {
+  logger.info("FORCE UNLOCK: Timer reached 0, unlocking system");
+  
+  resetTimer();
+  lockState = { locked: false, activeTeam: null };
+  io.emit("lockstate", lockState);
+  io.emit("timerReset");
+  
+  // Broadcast unlock to all clients
+  io.emit("systemUnlocked", { reason: "timer_expired" });
+  
+  logger.info("System forcefully unlocked due to timer expiration");
+}
+
+// ===== TIMER STATE ENDPOINT =====
+app.get("/timerstate", (req, res) => {
+  // Return current timer state in simple format for ESP32
+  if (isTimerRunning) {
+    res.send(timeRemaining.toString());
+  } else {
+    res.send("0"); // 0 means timer is not running or finished
+  }
+});
+
+// ===== DEBUG ENDPOINT =====
+app.get("/debug/timer", (req, res) => {
+  res.json({
+    isTimerRunning: isTimerRunning,
+    timeRemaining: timeRemaining,
+    lockState: lockState,
+    config: config,
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Function untuk memutar audio buzzer terlebih dahulu, kemudian audio tim
 function playBuzzerThenTeamAudio(team) {
