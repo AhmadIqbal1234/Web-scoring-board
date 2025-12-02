@@ -45,6 +45,11 @@ socket.on = function(event, callback) {
     });
 };
 
+// VARIABEL GLOBAL UNTUK MENCEGAH DOUBLE AUDIO
+let isPlayingAudio = false;
+let currentPlayingAudio = null;
+let isBuzzerPlaying = false;
+
 // SISTEM AUDIO FILE
 class SistemAudioTim {
   constructor() {
@@ -80,92 +85,16 @@ class SistemAudioTim {
     });
     this.sedangMemutar = false;
     
+    // Reset global flags
+    isPlayingAudio = false;
+    currentPlayingAudio = null;
+    isBuzzerPlaying = false;
+    
     if (this.onAudioEndCallback) {
       setTimeout(() => {
         this.executeCallback(this.onAudioEndCallback);
         this.onAudioEndCallback = null;
       }, 500);
-    }
-  }
-
-  putarAudio(team, onAudioEnd = null) {
-    if (this.sedangMemutar) {
-      clientLogger.warn('Audio sedang diputar, menghentikan yang lama');
-      this.berhenti();
-    }
-
-    const audioEl = this.audioElements.get(team);
-    if (!audioEl) {
-      clientLogger.error('Audio tidak ditemukan untuk tim:', team);
-      if (onAudioEnd) {
-        setTimeout(() => this.executeCallback(onAudioEnd), 100);
-      }
-      return false;
-    }
-
-    try {
-      this.sedangMemutar = true;
-      this.audioSekarang = audioEl;
-      this.onAudioEndCallback = onAudioEnd;
-      this.retryCount = 0;
-
-      audioEl.onended = () => {
-        clientLogger.success('Audio selesai diputar - executing callback');
-        this.sedangMemutar = false;
-        this.retryCount = 0;
-        if (this.onAudioEndCallback) {
-          this.executeCallback(this.onAudioEndCallback);
-          this.onAudioEndCallback = null;
-        }
-      };
-
-      audioEl.currentTime = 0;
-      
-      const playPromise = audioEl.play();
-      
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            clientLogger.success(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
-            
-            const aiMessageEl = document.getElementById("aiMessage");
-            if (aiMessageEl) {
-              aiMessageEl.textContent = `Tombol ditekan oleh Tim ${getTeamLetter(team)}!`;
-              aiMessageEl.classList.add("show");
-              
-              setTimeout(() => {
-                aiMessageEl.classList.remove("show");
-              }, 3000);
-            }
-          })
-          .catch(error => {
-            clientLogger.error('Gagal memutar audio:', error);
-            this.handlePlayError(team, onAudioEnd);
-          });
-      }
-      
-      return true;
-      
-    } catch (error) {
-      clientLogger.error('Exception audio:', error);
-      this.handlePlayError(team, onAudioEnd);
-      return false;
-    }
-  }
-
-  handlePlayError(team, onAudioEnd) {
-    this.sedangMemutar = false;
-    
-    if (this.retryCount < this.maxRetries) {
-      this.retryCount++;
-      clientLogger.warn(`Retry ${this.retryCount} untuk audio tim ${team}`);
-      setTimeout(() => this.putarAudio(team, onAudioEnd), 500);
-    } else {
-      if (onAudioEnd) {
-        setTimeout(() => {
-          this.executeCallback(onAudioEnd);
-        }, 500);
-      }
     }
   }
 
@@ -211,6 +140,121 @@ class SistemAudioTim {
       .catch(e => clientLogger.error('Fallback juga gagal:', e));
   }
 
+  putarAudio(team, onAudioEnd = null) {
+    // Cek apakah audio sedang diputar
+    if (isPlayingAudio && currentPlayingAudio === team) {
+      console.log('Audio untuk tim ini sudah diputar, mengabaikan');
+      return false;
+    }
+    
+    // Hentikan audio sebelumnya jika ada
+    if (this.sedangMemutar) {
+      clientLogger.warn('Audio sedang diputar, menghentikan yang lama');
+      this.berhenti();
+    }
+
+    const audioEl = this.audioElements.get(team);
+    if (!audioEl) {
+      clientLogger.error('Audio tidak ditemukan untuk tim:', team);
+      if (onAudioEnd) {
+        setTimeout(() => this.executeCallback(onAudioEnd), 100);
+      }
+      return false;
+    }
+
+    try {
+      this.sedangMemutar = true;
+      this.audioSekarang = audioEl;
+      this.onAudioEndCallback = onAudioEnd;
+      this.retryCount = 0;
+      
+      // Set global flag
+      isPlayingAudio = true;
+      currentPlayingAudio = team;
+      isBuzzerPlaying = false; // Reset buzzer flag
+
+      audioEl.onended = () => {
+        clientLogger.success('Audio selesai diputar - executing callback');
+        this.sedangMemutar = false;
+        this.retryCount = 0;
+        
+        // Reset global flags
+        isPlayingAudio = false;
+        currentPlayingAudio = null;
+        
+        if (this.onAudioEndCallback) {
+          this.executeCallback(this.onAudioEndCallback);
+          this.onAudioEndCallback = null;
+        }
+      };
+
+      audioEl.currentTime = 0;
+      
+      const playPromise = audioEl.play();
+      
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            clientLogger.success(`Memutar audio untuk Tim ${getTeamLetter(team)}`);
+            
+            const aiMessageEl = document.getElementById("aiMessage");
+            if (aiMessageEl) {
+              aiMessageEl.textContent = `Tombol ditekan oleh Tim ${getTeamLetter(team)}!`;
+              aiMessageEl.classList.add("show");
+              
+              setTimeout(() => {
+                aiMessageEl.classList.remove("show");
+              }, 3000);
+            }
+          })
+          .catch(error => {
+            clientLogger.error('Gagal memutar audio:', error);
+            
+            // Reset global flags jika error
+            isPlayingAudio = false;
+            currentPlayingAudio = null;
+            isBuzzerPlaying = false;
+            
+            this.handlePlayError(team, onAudioEnd);
+          });
+      }
+      
+      return true;
+      
+    } catch (error) {
+      clientLogger.error('Exception audio:', error);
+      
+      // Reset global flags jika error
+      isPlayingAudio = false;
+      currentPlayingAudio = null;
+      isBuzzerPlaying = false;
+      
+      this.handlePlayError(team, onAudioEnd);
+      return false;
+    }
+  }
+
+  handlePlayError(team, onAudioEnd) {
+    this.sedangMemutar = false;
+    
+    if (this.retryCount < this.maxRetries) {
+      this.retryCount++;
+      clientLogger.warn(`Retry ${this.retryCount} untuk audio tim ${team}`);
+      setTimeout(() => this.putarAudio(team, onAudioEnd), 500);
+    } else {
+      // Reset global flags
+      isPlayingAudio = false;
+      currentPlayingAudio = null;
+      isBuzzerPlaying = false;
+      
+      if (onAudioEnd) {
+        setTimeout(() => {
+          this.executeCallback(onAudioEnd);
+        }, 500);
+      }
+    }
+  }
+
   berhenti() {
     if (this.sedangMemutar && this.audioSekarang) {
       this.audioSekarang.pause();
@@ -218,6 +262,11 @@ class SistemAudioTim {
       this.sedangMemutar = false;
       this.onAudioEndCallback = null;
       this.retryCount = 0;
+      
+      // Reset global flags
+      isPlayingAudio = false;
+      currentPlayingAudio = null;
+      isBuzzerPlaying = false;
     }
   }
 }
@@ -390,26 +439,20 @@ const timerAudio = new TimerAudioSystem();
 const juryAudio = new JuryAudioSystem();
 
 // ===== HANDLER BARU UNTUK PRE-TEAM AUDIO (BUZZER) =====
-
-// Function untuk memutar audio tim langsung
 function playTeamAudioDirectly(team) {
-    const teamAudioFile = getTeamAudioFile(team);
-    console.log('Memutar audio tim langsung:', teamAudioFile);
+    console.log('Memutar audio tim langsung untuk Tim', getTeamLetter(team));
     
     const audioSuccess = audioTim.putarAudio(team, {
         action: "startTimer",
-        team: team,
-        timerDuration: 30 // default duration
+        team: team
     });
     
     if (!audioSuccess) {
         console.warn('Audio playback failed, using fallback');
         setTimeout(() => {
-            fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
-                .then(r => r.json())
-                .then(data => console.log('Fallback result:', data))
-                .catch(e => console.error('Fallback failed:', e));
-        }, 1000);
+            // Beritahu server untuk mulai timer
+            socket.emit("preTeamAudioFinished", { team: team });
+        }, 500);
     }
 }
 
@@ -438,6 +481,7 @@ function resetTimerDisplay() {
     if (timerEl) {
         timerEl.textContent = '00:00';
         timerEl.classList.remove('warning', 'critical');
+        console.log('Timer display reset to 00:00');
     }
 }
 
@@ -475,11 +519,18 @@ function resetDisplay() {
         if (el) el.classList.remove("active", "hidden");
     }
     overlay.classList.remove("active");
+    console.log('Display reset - all teams visible');
 }
 
 // Helper tim
 function getTeamLetter(index) {
     return String.fromCharCode(65 + index - 1);
+}
+
+// Get audio file name untuk tim
+function getTeamAudioFile(teamNumber) {
+    const teamLetter = getTeamLetter(teamNumber);
+    return `Tim ${teamLetter}.mp3`;
 }
 
 // Update tampilan berdasarkan status toggle tim
@@ -618,26 +669,34 @@ socket.on("disconnect", () => {
     }
 });
 
-// ===== HANDLER UNTUK PRE-TEAM AUDIO (BUZZER) =====
+// ===== HANDLER UNTUK PRE-TEAM AUDIO (BUZZER) - DIPERBAIKI =====
 socket.on("playPreTeamAudio", (data) => {
     console.log('PLAY PRE-TEAM AUDIO (BUZZER):', data);
     const { team, audioFile } = data;
 
     console.log(`Memutar buzzer audio: ${audioFile} untuk Tim ${getTeamLetter(team)}`);
     
+    // Hentikan audio tim yang sedang diputar jika ada
+    audioTim.berhenti();
+    
+    // Set flag bahwa buzzer sedang diputar
+    isBuzzerPlaying = true;
+    
     // Memutar audio buzzer
     const buzzerAudio = new Audio(`/audio/${audioFile}`);
     
     buzzerAudio.onerror = (e) => {
         console.error('Error memutar buzzer audio:', e);
+        // Reset flag
+        isBuzzerPlaying = false;
         // Jika buzzer gagal, langsung lanjut ke audio tim
-        setTimeout(() => {
-            playTeamAudioDirectly(team);
-        }, 500);
+        playTeamAudioDirectly(team);
     };
     
     buzzerAudio.onended = () => {
         console.log('Buzzer audio selesai, melanjutkan ke audio tim');
+        // Reset flag
+        isBuzzerPlaying = false;
         // Setelah buzzer selesai, mainkan audio tim
         playTeamAudioDirectly(team);
         
@@ -649,6 +708,8 @@ socket.on("playPreTeamAudio", (data) => {
     if (playPromise !== undefined) {
         playPromise.catch(error => {
             console.error('Gagal memutar buzzer audio:', error);
+            // Reset flag
+            isBuzzerPlaying = false;
             // Fallback: langsung ke audio tim
             playTeamAudioDirectly(team);
         });
@@ -748,30 +809,35 @@ socket.on("buzz", ({ team }) => {
     }
 });
 
-// PlayTeamAudio event
+// PlayTeamAudio event - HANYA SEBAGAI BACKUP
 socket.on("playTeamAudio", (data) => {
-    console.log('PLAY TEAM AUDIO EVENT:', data);
+    console.log('PLAY TEAM AUDIO EVENT (BACKUP):', data);
     const { team, audioFile, timerDuration } = data;
 
-    console.log(`Starting audio for Team ${getTeamLetter(team)}: ${audioFile}`);
+    console.log(`Starting audio for Team ${getTeamLetter(team)}: ${audioFile} (BACKUP SYSTEM)`);
     
-    const audioSuccess = audioTim.putarAudio(team, {
-        action: "startTimer",
-        team: team,
-        timerDuration: timerDuration
-    });
-    
-    console.log('Audio playback result:', audioSuccess);
-    
-    if (!audioSuccess) {
-        console.warn('Audio playback failed, using fallback');
-        setTimeout(() => {
-            console.log('Executing fallback timer start');
-            fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
-                .then(r => r.json())
-                .then(data => console.log('Fallback result:', data))
-                .catch(e => console.error('Fallback failed:', e));
-        }, 1000);
+    // Cek apakah audio sudah diputar oleh sistem utama
+    if (!isPlayingAudio || currentPlayingAudio !== team) {
+        const audioSuccess = audioTim.putarAudio(team, {
+            action: "startTimer",
+            team: team,
+            timerDuration: timerDuration
+        });
+        
+        console.log('Audio playback result:', audioSuccess);
+        
+        if (!audioSuccess) {
+            console.warn('Audio playback failed, using fallback');
+            setTimeout(() => {
+                console.log('Executing fallback timer start');
+                fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
+                    .then(r => r.json())
+                    .then(data => console.log('Fallback result:', data))
+                    .catch(e => console.error('Fallback failed:', e));
+            }, 1000);
+        }
+    } else {
+        console.log('Audio sudah diputar oleh sistem utama, mengabaikan backup');
     }
 });
 
@@ -819,8 +885,14 @@ socket.on("aiMessage", (data) => {
     aiMessageEl.textContent = message;
     aiMessageEl.classList.add("show");
     
+    // Jika pesan mengandung "Waktu habis!" atau "dikurangi", tambahkan class khusus untuk penalti
+    if (message.includes("Waktu habis!") || message.includes("dikurangi")) {
+        aiMessageEl.classList.add("penalty-message");
+    }
+    
     aiMessageTimeout = setTimeout(() => {
         aiMessageEl.classList.remove("show");
+        aiMessageEl.classList.remove("penalty-message");
     }, 4000);
 });
 
@@ -833,23 +905,100 @@ socket.on("timerStart", (data) => {
 });
 
 socket.on("timerUpdate", (data) => {
+    console.log('Timer update:', data);
     if (data.timeRemaining !== undefined) {
         updateTimerDisplay(data.timeRemaining);
     }
 });
 
 socket.on("timerEnd", () => {
-    console.log('Timer end received');
+    console.log('Timer end received - timer reached 0');
     updateTimerDisplay(0);
 });
 
 socket.on("timerReset", () => {
-    console.log('Timer reset received');
+    console.log('Timer reset received - resetting display to 00:00');
+    resetTimerDisplay();
+    resetDisplay();
+});
+
+// Event untuk system unlocked
+socket.on("systemUnlocked", (data) => {
+    console.log('System unlocked:', data);
+    
+    // Reset tampilan
+    resetDisplay();
+    resetTimerDisplay();
+    
+    // Tampilkan notifikasi jika ada
+    if (data.reason === "timer_expired") {
+        console.log('System unlocked due to timer expiration');
+    } else if (data.reason === "auto_penalty_applied") {
+        console.log('System unlocked after auto penalty');
+    }
+});
+
+// Event untuk timer reset confirm
+socket.on("timerResetConfirm", (data) => {
+    console.log('Timer reset confirmed:', data);
     resetTimerDisplay();
 });
+
+// Event untuk timer status response
+socket.on("timerStatusResponse", (data) => {
+    console.log('Timer status response:', data);
+    if (!data.isRunning) {
+        resetTimerDisplay();
+        if (!data.lockState.locked) {
+            resetDisplay();
+        }
+    } else {
+        updateTimerDisplay(data.timeRemaining);
+    }
+});
+
+// Event untuk auto penalty
+socket.on("autoPenaltyToggle", (data) => {
+    console.log('Auto penalty toggle:', data);
+    const status = data.enabled ? 'diaktifkan' : 'dinonaktifkan';
+    console.log(`Penalti otomatis ${status}`);
+});
+
+socket.on("autoPenaltyStatus", (data) => {
+    console.log('Auto penalty status:', data);
+    console.log(`Penalti otomatis: ${data.enabled ? 'AKTIF' : 'NONAKTIF'} (${data.penaltyPoints} poin)`);
+});
+
+socket.on("autoPenaltyConfig", (data) => {
+    console.log('Auto penalty config:', data);
+    console.log(`Konfigurasi penalti: ${data.enabled ? 'AKTIF' : 'NONAKTIF'} (${data.penaltyPoints} poin)`);
+});
+
+// Function untuk request timer reset jika diperlukan
+function requestTimerReset() {
+    socket.emit("requestTimerReset");
+}
+
+// Function untuk check timer status
+function checkTimerStatus() {
+    socket.emit("getTimerStatus");
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
     console.log('Display initialized - Enhanced debugging enabled');
+    console.log('Fitur penalti otomatis: Siap menerima notifikasi penalti saat timer habis');
+    
+    // Check timer status setiap 5 detik untuk sinkronisasi
+    setInterval(checkTimerStatus, 5000);
+    
+    // Check timer status awal
+    setTimeout(checkTimerStatus, 1000);
+    
+    // Auto-reset safety: jika timer masih stuck setelah 2 menit, reset manual
+    setTimeout(() => {
+        checkTimerStatus();
+        console.log('Safety check: Verifying timer state...');
+    }, 120000);
 });

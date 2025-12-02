@@ -358,6 +358,23 @@ main {
   animation: countdownBounce 0.5s ease-out;
 }
 
+/* Style khusus untuk pesan penalti */
+.ai-message.penalty-message {
+  background: linear-gradient(135deg, #ff4444, #cc0000);
+  border: 3px solid #ff6b6b;
+  box-shadow: 0 0 30px rgba(255, 0, 0, 0.6);
+  animation: penaltyPulse 1s infinite;
+}
+
+@keyframes penaltyPulse {
+  0%, 100% {
+    box-shadow: 0 0 30px rgba(255, 0, 0, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(255, 0, 0, 0.9);
+  }
+}
+
 /* ===== ANIMATIONS ===== */
 @keyframes glowPulse {
   0%,
@@ -675,4 +692,3 @@ footer h5 {
     opacity: 0.5;
   }
 }
-

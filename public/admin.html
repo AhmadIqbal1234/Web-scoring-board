@@ -6,6 +6,96 @@
   <title>Admin Panel</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/admin.css" />
+  <style>
+    /* ===== TOGGLE SWITCH STYLES ===== */
+    .toggle-switch {
+      display: flex;
+      align-items: center;
+      margin-top: 0.5rem;
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      gap: 1rem;
+      width: 100%;
+    }
+
+    .toggle-text {
+      color: #e0e0ff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .toggle-slider {
+      position: relative;
+      width: 50px;
+      height: 24px;
+      background: #2a2a6a;
+      border-radius: 34px;
+      transition: .4s;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 4px;
+      bottom: 4px;
+      background: white;
+      border-radius: 50%;
+      transition: .4s;
+    }
+
+    #autoPenaltyToggle:checked + .toggle-label .toggle-slider {
+      background: #00aa00;
+    }
+
+    #autoPenaltyToggle:checked + .toggle-label .toggle-slider:before {
+      transform: translateX(26px);
+    }
+
+    #autoPenaltyToggle {
+      display: none;
+    }
+
+    /* Lightweight button styles for SweetAlert */
+    .btn {
+      display: inline-block;
+      font-weight: 600;
+      color: #212529;
+      text-align: center;
+      vertical-align: middle;
+      user-select: none;
+      background-color: transparent;
+      border: 1px solid transparent;
+      padding: 0.45rem 0.8rem;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .btn-success {
+      background-color: #28a745;
+      color: #fff;
+      border-color: #28a745;
+    }
+
+    .btn-danger {
+      background-color: #dc3545;
+      color: #fff;
+      border-color: #dc3545;
+    }
+
+    .btn:focus {
+      outline: none;
+      box-shadow: 0 0 0 4px rgba(40,167,69,0.12);
+    }
+  </style>
   <script>
   // Force favicon load
   const favicon = document.createElement('link');
@@ -46,6 +136,21 @@
           <small class="config-help">Timer akan otomatis mulai saat tim pertama menekan tombol</small>
         </div>
 
+        <!-- Auto Penalty Toggle -->
+        <div class="config-item">
+          <label class="config-label">Penalti Otomatis</label>
+          <div class="toggle-switch">
+            <input type="checkbox" id="autoPenaltyToggle" checked>
+            <label for="autoPenaltyToggle" class="toggle-label">
+              <span class="toggle-text">Aktifkan penalti otomatis saat timer habis</span>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <small class="config-help">
+            Saat timer habis tanpa respon juri, sistem otomatis mengurangi poin sesuai nilai "Poin Jawaban Salah"
+          </small>
+        </div>
+
         <div class="config-buttons">
           <button id="setConfig" class="admin-btn btn-save">
             <span></span>
@@ -66,6 +171,7 @@
       <div class="timer-status" id="timerStatus">
         <strong>Status Timer:</strong> <span id="timerState">TIDAK AKTIF</span>
         | <strong>Waktu Tersisa:</strong> <span id="currentTime">00:00</span>
+        | <strong>Penalti Otomatis:</strong> <span id="penaltyStatus" class="status-active">AKTIF</span>
       </div>
     </section>
 
