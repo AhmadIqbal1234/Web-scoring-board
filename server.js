@@ -107,6 +107,7 @@ let timerInterval = null;
 let timeRemaining = 0;
 let isTimerRunning = false;
 let audioFinishTimeout = null;
+let lastTimerEvent = null;
 
 // ===== STATE ESP32 =====
 let esp32Status = {
@@ -269,11 +270,24 @@ function handleAutoPenalty() {
   io.emit("update", { team: activeTeam, score: scores[activeTeam - 1] });
   io.emit("scoring", { team: activeTeam, isCorrect: false });
   
-  // Pesan feedback
+  // Reset semua state SEBELUM mengirim pesan
+  lockState = { locked: false, activeTeam: null };
+  io.emit("lockstate", lockState);
+  
+  // Hentikan timer
+  isTimerRunning = false;
+  timeRemaining = 0;
+  
+  // Kirim timerReset SEKALI SAJA
+  io.emit("timerReset");
+  
+  // Pesan feedback - TANPA animasi merah
   const feedbackMessage = `Waktu habis! Tim ${getTeamLetter(activeTeam)} tidak menjawab, dikurangi ${Math.abs(penaltyPoints)} poin!`;
   
+  // Kirim pesan dengan tipe warning, bukan penalty
   io.emit("aiMessage", {
     message: feedbackMessage,
+    type: "warning",
     shouldSpeak: false
   });
   
@@ -284,26 +298,29 @@ function handleAutoPenalty() {
     skorSekarang: scores[activeTeam - 1]
   });
   
-  // Reset semua state
-  lockState = { locked: false, activeTeam: null };
-  io.emit("lockstate", lockState);
+  // JANGAN kirim systemUnlocked lagi, sudah ada timerReset dan lockstate
+  // io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
   
-  isTimerRunning = false;
-  timeRemaining = 0;
-  io.emit("timerReset");
-  io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
-  
-  logger.info('Penalti otomatis diterapkan dan sistem dibuka');
+  logger.info('Penalti otomatis diterapkan dan sistem dibuka', {
+    lastTimerEvent: 'timerReset'
+  });
 }
 
 // ===== FUNGSI BUKA KUNCI SISTEM =====
 function unlockSystemOnTimerEnd() {
-  logger.info("TIMER SELESAI: Membuka sistem");
+  logger.info("TIMER SELESAI: Membuka sistem (tanpa penalti)");
   
-  // Reset timer
+  // Hentikan timer interval terlebih dahulu
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  
   isTimerRunning = false;
   timeRemaining = 0;
-  io.emit("timerReset");
+  
+  // TIDAK PERLU kirim timerReset lagi di sini
+  // Biarkan handleAutoPenalty yang kirim timerReset
   
   // Buka kunci jika masih terkunci
   if (lockState.locked) {
@@ -311,6 +328,7 @@ function unlockSystemOnTimerEnd() {
     lockState = { locked: false, activeTeam: null };
     io.emit("lockstate", lockState);
     
+    // Hanya kirim systemUnlocked TANPA timerReset
     io.emit("systemUnlocked", { 
       reason: "timer_expired",
       previousActiveTeam: previousActiveTeam 
@@ -318,7 +336,7 @@ function unlockSystemOnTimerEnd() {
     
     logger.info(`Sistem dibuka karena timer habis. Tim sebelumnya: ${previousActiveTeam}`);
   } else {
-    logger.info('Sistem sudah terbuka, hanya reset timer');
+    logger.info('Sistem sudah terbuka, timer direset');
   }
 }
 
@@ -456,7 +474,10 @@ function updateESP32FromHTTP(ip, activityType = "http_activity") {
 // ===== SISTEM TIMER =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
-    logger.info("Timer sudah berjalan, abaikan permintaan");
+    logger.info("Timer sudah berjalan, abaikan permintaan", {
+      waktuTersisa: timeRemaining,
+      timAktif: activeTeam
+    });
     return;
   }
   
@@ -465,17 +486,20 @@ function startTimer(activeTeam = null) {
   const currentActiveTeam = activeTeam || lockState.activeTeam;
 
   io.emit("timerStart", { duration: config.timerDuration });
+  lastTimerEvent = 'timerStart';
   
   logger.info("Timer dimulai", { 
     waktuTersisa: timeRemaining, 
     timAktif: currentActiveTeam,
     hurufTim: getTeamLetter(currentActiveTeam),
-    penaltiOtomatis: isAutoPenaltyEnabled
+    penaltiOtomatis: isAutoPenaltyEnabled,
+    timestamp: Date.now()
   });
 
   timerInterval = setInterval(() => {
     timeRemaining--;
     io.emit("timerUpdate", { timeRemaining });
+    lastTimerEvent = 'timerUpdate';
 
     if ([30, 20, 10, 5, 4, 3, 2, 1, 0].includes(timeRemaining)) {
       timerAudio.playCountdownAudio(timeRemaining);
@@ -486,10 +510,22 @@ function startTimer(activeTeam = null) {
       timerInterval = null;
       isTimerRunning = false;
       
-      io.emit("timerEnd");
-      logger.info('Timer mencapai 0, mengirim event timerEnd');
+      logger.info('Timer mencapai 0', {
+        timestamp: Date.now(),
+        lockState: lockState,
+        autoPenaltyEnabled: isAutoPenaltyEnabled
+      });
       
+      // Jangan kirim timerEnd di sini, biarkan unlockSystemOnTimerEnd atau handleAutoPenalty yang kirim timerReset
+      
+      // Gunakan timeout untuk proses setelah timer habis
       setTimeout(() => {
+        logger.info('Memproses setelah timer habis', {
+          autoPenaltyEnabled: isAutoPenaltyEnabled,
+          locked: lockState.locked,
+          activeTeam: lockState.activeTeam
+        });
+        
         if (isAutoPenaltyEnabled && lockState.locked && lockState.activeTeam) {
           logger.info('Menerapkan penalti otomatis...');
           handleAutoPenalty();
@@ -497,7 +533,7 @@ function startTimer(activeTeam = null) {
           logger.info('Penalti otomatis dimatikan atau tidak ada tim aktif, hanya buka kunci');
           unlockSystemOnTimerEnd();
         }
-      }, 100);
+      }, 50);
     }
   }, 1000);
 }
@@ -514,9 +550,15 @@ function stopTimer(activeTeam = null) {
   }
   
   isTimerRunning = false;
-  io.emit("timerEnd");
+  
+  // Reset timer di client
+  io.emit("timerReset");
+  lastTimerEvent = 'timerReset';
 
-  logger.info("Timer dihentikan", { timAktif: activeTeam });
+  logger.info("Timer dihentikan dan direset", { 
+    timAktif: activeTeam,
+    lastTimerEvent: lastTimerEvent
+  });
 }
 
 function resetTimer() {
@@ -532,9 +574,15 @@ function resetTimer() {
   
   isTimerRunning = false;
   timeRemaining = 0;
-  io.emit("timerReset");
   
-  logger.info("Timer direset");
+  // Reset timer di client
+  io.emit("timerReset");
+  lastTimerEvent = 'timerReset';
+  
+  logger.info("Timer direset manual", {
+    lastTimerEvent: lastTimerEvent,
+    timestamp: Date.now()
+  });
 }
 
 // ===== FUNGSI BUKA KUNSI PAKSA =====
@@ -554,12 +602,17 @@ function forceUnlockSystem() {
   // Buka kunci sistem
   lockState = { locked: false, activeTeam: null };
   io.emit("lockstate", lockState);
+  
+  // Reset timer di client
   io.emit("timerReset");
+  lastTimerEvent = 'timerReset';
   
   // Broadcast ke semua client
   io.emit("systemUnlocked", { reason: "buka_kunci_manual" });
   
-  logger.info("Sistem dibuka paksa");
+  logger.info("Sistem dibuka paksa dan timer direset", {
+    lastTimerEvent: lastTimerEvent
+  });
 }
 
 // ===== MEMUTAR AUDIO BUZZER DAN TIM =====
@@ -694,6 +747,7 @@ app.get("/debug/timer", (req, res) => {
   res.json({
     timerBerjalan: isTimerRunning,
     waktuTersisa: timeRemaining,
+    lastTimerEvent: lastTimerEvent,
     statusKunci: lockState,
     konfigurasi: config,
     waktu: new Date().toLocaleTimeString('id-ID')
@@ -727,7 +781,8 @@ app.get("/debug/timer/fix", (req, res) => {
     pesan: "Timer direset paksa",
     timer: {
       berjalan: isTimerRunning,
-      waktuTersisa: timeRemaining
+      waktuTersisa: timeRemaining,
+      lastTimerEvent: lastTimerEvent
     },
     statusKunci: lockState
   });
@@ -990,11 +1045,13 @@ app.get("/update", async (req, res) => {
     const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
     io.emit("aiMessage", {
       message: feedbackMessage,
+      type: add > 0 ? "success" : "penalty",
       shouldSpeak: false
     });
     
     logger.info(`JURI: "${feedbackMessage}"`);
     
+    // Reset timer dan buka kunci
     resetTimer();
     lockState = { locked: false, activeTeam: null };
     io.emit("lockstate", lockState);
@@ -1072,10 +1129,9 @@ app.get("/unlock", (req, res) => {
   resetTimer();
   lockState = { locked: false, activeTeam: null };
   io.emit("lockstate", lockState);
-  io.emit("timerReset");
   
-  logger.info("Buka kunci manual diterapkan");
-  res.json({ sukses: true, pesan: "Sistem dibuka", statusKunci: lockState });
+  logger.info("Buka kunci manual diterapkan dan timer direset");
+  res.json({ sukses: true, pesan: "Sistem dibuka dan timer direset", statusKunci: lockState });
 });
 
 app.get("/setconfig", (req, res) => {
@@ -1105,7 +1161,7 @@ app.get("/reset", (req, res) => {
   lockState = { locked: false, activeTeam: null };
   io.emit("reset", scores);
   io.emit("lockstate", lockState);
-  res.json({ sukses: true, pesan: "Skor direset", skor: scores });
+  res.json({ sukses: true, pesan: "Skor direset dan timer direset", skor: scores });
 });
 
 app.get("/scores", (req, res) => {
@@ -1155,7 +1211,8 @@ app.get("/health", (req, res) => {
     konfigurasi: config,
     timer: {
       berjalan: isTimerRunning,
-      tersisa: timeRemaining
+      tersisa: timeRemaining,
+      lastTimerEvent: lastTimerEvent
     },
     esp32: esp32Status,
     penaltiOtomatis: {
@@ -1269,7 +1326,8 @@ io.on("connection", (socket) => {
     socket.emit("timerStatusResponse", {
       berjalan: isTimerRunning,
       waktuTersisa: timeRemaining,
-      statusKunci: lockState
+      statusKunci: lockState,
+      lastTimerEvent: lastTimerEvent
     });
   });
 

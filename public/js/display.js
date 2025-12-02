@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/*Copyright © 2025 Ridwan and Team*/
+﻿﻿/*Copyright © 2025 Ridwan and Team*/
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -49,6 +49,12 @@ socket.on = function(event, callback) {
 let isPlayingAudio = false;
 let currentPlayingAudio = null;
 let isBuzzerPlaying = false;
+
+// TIMER STABILIZATION VARIABLES
+let lastTimerValue = 0;
+let timerStableTimeout = null;
+let lastTimerEventTime = 0;
+const TIMER_EVENT_DEBOUNCE = 50; // ms
 
 // SISTEM AUDIO FILE
 class SistemAudioTim {
@@ -438,9 +444,38 @@ const audioTim = new SistemAudioTim();
 const timerAudio = new TimerAudioSystem();
 const juryAudio = new JuryAudioSystem();
 
+// ===== FUNGSI SINKRONISASI TIMER DENGAN SERVER =====
+function syncTimerWithServer() {
+    fetch('/timerstate')
+        .then(r => r.text())
+        .then(timerState => {
+            const time = parseInt(timerState);
+            if (!isNaN(time)) {
+                const timerEl = document.querySelector('.timer');
+                if (timerEl) {
+                    if (time <= 0) {
+                        timerEl.textContent = '00:00';
+                        lastTimerValue = 0;
+                    } else {
+                        const minutes = Math.floor(time / 60);
+                        const seconds = time % 60;
+                        timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                        lastTimerValue = time;
+                    }
+                    
+                    // Update warna timer
+                    updateTimerColor(time);
+                }
+            }
+        })
+        .catch(err => {
+            clientLogger.error('Error syncing timer:', err);
+        });
+}
+
 // ===== HANDLER BARU UNTUK PRE-TEAM AUDIO (BUZZER) =====
 function playTeamAudioDirectly(team) {
-    console.log('Memutar audio tim langsung untuk Tim', getTeamLetter(team));
+    clientLogger.info('Memutar audio tim langsung untuk Tim', getTeamLetter(team));
     
     const audioSuccess = audioTim.putarAudio(team, {
         action: "startTimer",
@@ -448,11 +483,34 @@ function playTeamAudioDirectly(team) {
     });
     
     if (!audioSuccess) {
-        console.warn('Audio playback failed, using fallback');
+        clientLogger.warn('Audio playback failed, using fallback');
         setTimeout(() => {
             // Beritahu server untuk mulai timer
             socket.emit("preTeamAudioFinished", { team: team });
         }, 500);
+    }
+}
+
+// ===== FUNGSI UPDATE WARNA TIMER =====
+function updateTimerColor(seconds) {
+    const timerEl = document.querySelector('.timer');
+    if (!timerEl) return;
+    
+    // Hapus semua class warna sebelumnya
+    timerEl.classList.remove('normal', 'warning', 'critical', 'inactive');
+    
+    if (seconds <= 0) {
+        // Timer 00:00 atau tidak aktif - HIJAU TANPA ANIMASI
+        timerEl.classList.add('inactive');
+    } else if (seconds <= 10) {
+        // ≤10 detik - MERAH dengan animasi
+        timerEl.classList.add('critical');
+    } else if (seconds <= 30) {
+        // ≤30 detik - ORANGE dengan animasi
+        timerEl.classList.add('warning');
+    } else {
+        // >30 detik - HIJAU normal
+        timerEl.classList.add('normal');
     }
 }
 
@@ -464,24 +522,29 @@ function updateTimerDisplay(seconds) {
       return;
     }
     
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    
-    timerEl.classList.remove('warning', 'critical');
-    if (seconds <= 10) {
-        timerEl.classList.add('critical');
-    } else if (seconds <= 30) {
-        timerEl.classList.add('warning');
+    // Format yang konsisten
+    if (seconds <= 0) {
+        timerEl.textContent = '00:00';
+    } else {
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
+    
+    // Update warna berdasarkan waktu tersisa
+    updateTimerColor(seconds);
+    
+    lastTimerValue = seconds;
 }
 
 function resetTimerDisplay() {
     const timerEl = document.querySelector('.timer');
     if (timerEl) {
         timerEl.textContent = '00:00';
-        timerEl.classList.remove('warning', 'critical');
-        console.log('Timer display reset to 00:00');
+        timerEl.classList.remove('normal', 'warning', 'critical');
+        timerEl.classList.add('inactive'); // PASTIKAN HIJAU SAAT RESET
+        lastTimerValue = 0;
+        clientLogger.info('Timer display reset to 00:00 (inactive green)');
     }
 }
 
@@ -519,7 +582,7 @@ function resetDisplay() {
         if (el) el.classList.remove("active", "hidden");
     }
     overlay.classList.remove("active");
-    console.log('Display reset - all teams visible');
+    clientLogger.info('Display reset - all teams visible');
 }
 
 // Helper tim
@@ -605,34 +668,39 @@ socket.on("connect", () => {
     socket.emit('ping', { timestamp: Date.now(), message: 'Hello from client!' });
     
     loadInitialData();
+    
+    // Sync timer saat pertama connect
+    syncTimerWithServer();
 });
 
 // Function untuk load initial data
 function loadInitialData() {
-    console.log('Loading initial data from server...');
+    clientLogger.info('Loading initial data from server...');
     
     Promise.all([
         fetch('/scores').then(r => {
-            console.log('Scores response status:', r.status);
+            clientLogger.info('Scores response status:', r.status);
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
         }),
         fetch('/lockstate').then(r => {
-            console.log('Lockstate response status:', r.status);
+            clientLogger.info('Lockstate response status:', r.status);
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
         }),
         fetch('/teamToggleState').then(r => {
-            console.log('ToggleState response status:', r.status);
+            clientLogger.info('ToggleState response status:', r.status);
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
+        }),
+        fetch('/timerstate').then(r => {
+            clientLogger.info('Timerstate response status:', r.status);
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.text();
         })
     ])
-    .then(([scoresData, lockStateData, toggleStateData]) => {
-        console.log('All initial data loaded successfully');
-        console.log('Scores:', scoresData);
-        console.log('LockState:', lockStateData);
-        console.log('ToggleState:', toggleStateData);
+    .then(([scoresData, lockStateData, toggleStateData, timerState]) => {
+        clientLogger.info('All initial data loaded successfully');
         
         if (Array.isArray(scoresData)) {
             for (let i = 0; i < scoresData.length; i++) {
@@ -642,7 +710,7 @@ function loadInitialData() {
         }
         
         if (lockStateData && lockStateData.locked && lockStateData.activeTeam) {
-            console.log('Active team from lockstate:', lockStateData.activeTeam);
+            clientLogger.info('Active team from lockstate:', lockStateData.activeTeam);
             showActiveTeam(lockStateData.activeTeam);
         }
         
@@ -650,14 +718,20 @@ function loadInitialData() {
             teamToggleState = toggleStateData;
             updateTeamDisplay();
         }
+        
+        // Sync timer dari server
+        const time = parseInt(timerState);
+        if (!isNaN(time)) {
+            updateTimerDisplay(time);
+        }
     })
     .catch(err => {
-        console.error('Error loading initial data:', err);
+        clientLogger.error('Error loading initial data:', err);
     });
 }
 
 socket.on("pong", (data) => {
-    console.log('Pong received from server:', data);
+    clientLogger.info('Pong received from server:', data);
 });
 
 socket.on("disconnect", () => {
@@ -669,12 +743,12 @@ socket.on("disconnect", () => {
     }
 });
 
-// ===== HANDLER UNTUK PRE-TEAM AUDIO (BUZZER) - DIPERBAIKI =====
+// ===== HANDLER UNTUK PRE-TEAM AUDIO (BUZZER) =====
 socket.on("playPreTeamAudio", (data) => {
-    console.log('PLAY PRE-TEAM AUDIO (BUZZER):', data);
+    clientLogger.info('PLAY PRE-TEAM AUDIO (BUZZER):', data);
     const { team, audioFile } = data;
 
-    console.log(`Memutar buzzer audio: ${audioFile} untuk Tim ${getTeamLetter(team)}`);
+    clientLogger.info(`Memutar buzzer audio: ${audioFile} untuk Tim ${getTeamLetter(team)}`);
     
     // Hentikan audio tim yang sedang diputar jika ada
     audioTim.berhenti();
@@ -686,7 +760,7 @@ socket.on("playPreTeamAudio", (data) => {
     const buzzerAudio = new Audio(`/audio/${audioFile}`);
     
     buzzerAudio.onerror = (e) => {
-        console.error('Error memutar buzzer audio:', e);
+        clientLogger.error('Error memutar buzzer audio:', e);
         // Reset flag
         isBuzzerPlaying = false;
         // Jika buzzer gagal, langsung lanjut ke audio tim
@@ -694,7 +768,7 @@ socket.on("playPreTeamAudio", (data) => {
     };
     
     buzzerAudio.onended = () => {
-        console.log('Buzzer audio selesai, melanjutkan ke audio tim');
+        clientLogger.info('Buzzer audio selesai, melanjutkan ke audio tim');
         // Reset flag
         isBuzzerPlaying = false;
         // Setelah buzzer selesai, mainkan audio tim
@@ -707,7 +781,7 @@ socket.on("playPreTeamAudio", (data) => {
     const playPromise = buzzerAudio.play();
     if (playPromise !== undefined) {
         playPromise.catch(error => {
-            console.error('Gagal memutar buzzer audio:', error);
+            clientLogger.error('Gagal memutar buzzer audio:', error);
             // Reset flag
             isBuzzerPlaying = false;
             // Fallback: langsung ke audio tim
@@ -718,7 +792,7 @@ socket.on("playPreTeamAudio", (data) => {
 
 // Update skor realtime
 socket.on("update", payload => {
-    console.log('Score update received from server:', payload);
+    clientLogger.info('Score update received from server:', payload);
     const { team, score } = payload;
     
     if (team && score !== undefined && team >= 1 && team <= TEAM_COUNT) {
@@ -739,7 +813,7 @@ socket.on("update", payload => {
 
 // Reset semua skor
 socket.on("reset", arr => {
-    console.log('Reset scores received:', arr);
+    clientLogger.info('Reset scores received:', arr);
     if (Array.isArray(arr)) {
         arr.forEach((s, idx) => {
             const el = document.getElementById("score-" + (idx + 1));
@@ -750,7 +824,7 @@ socket.on("reset", arr => {
 
 // Status kunci tim
 socket.on("lockstate", state => {
-    console.log('Lock state update:', state);
+    clientLogger.info('Lock state update:', state);
     if (!state.locked) {
         resetDisplay();
     } else if (state.activeTeam) {
@@ -760,7 +834,7 @@ socket.on("lockstate", state => {
 
 // Event untuk update status toggle tim individual
 socket.on("teamToggleUpdate", data => {
-    console.log('Team toggle update:', data);
+    clientLogger.info('Team toggle update:', data);
     const { team, enabled } = data;
     
     if (team >= 1 && team <= TEAM_COUNT) {
@@ -772,7 +846,7 @@ socket.on("teamToggleUpdate", data => {
 
 // Event untuk enable semua tim
 socket.on("allTeamsEnabled", () => {
-    console.log('All teams enabled received');
+    clientLogger.info('All teams enabled received');
     teamToggleState = Array(TEAM_COUNT).fill(true);
     updateTeamDisplay();
     clientLogger.info('All teams enabled');
@@ -780,7 +854,7 @@ socket.on("allTeamsEnabled", () => {
 
 // Event untuk disable semua tim
 socket.on("allTeamsDisabled", () => {
-    console.log('All teams disabled received');
+    clientLogger.info('All teams disabled received');
     teamToggleState = Array(TEAM_COUNT).fill(false);
     updateTeamDisplay();
     clientLogger.info('All teams disabled');
@@ -788,7 +862,7 @@ socket.on("allTeamsDisabled", () => {
 
 // Event untuk initial team toggle state
 socket.on("teamToggleState", data => {
-    console.log('Team toggle state received:', data);
+    clientLogger.info('Team toggle state received:', data);
     if (Array.isArray(data)) {
         teamToggleState = data;
         updateTeamDisplay();
@@ -798,23 +872,22 @@ socket.on("teamToggleState", data => {
 
 // Buzz event
 socket.on("buzz", ({ team }) => {
-    console.log('BUZZ EVENT RECEIVED - Team:', team);
-    console.log('Current teamToggleState:', teamToggleState);
+    clientLogger.info('BUZZ EVENT RECEIVED - Team:', team);
     
     if (teamToggleState[team - 1]) {
-        console.log('Team is enabled, showing active team');
+        clientLogger.info('Team is enabled, showing active team');
         showActiveTeam(team);
     } else {
-        console.log('Team is disabled, ignoring buzz');
+        clientLogger.info('Team is disabled, ignoring buzz');
     }
 });
 
 // PlayTeamAudio event - HANYA SEBAGAI BACKUP
 socket.on("playTeamAudio", (data) => {
-    console.log('PLAY TEAM AUDIO EVENT (BACKUP):', data);
+    clientLogger.info('PLAY TEAM AUDIO EVENT (BACKUP):', data);
     const { team, audioFile, timerDuration } = data;
 
-    console.log(`Starting audio for Team ${getTeamLetter(team)}: ${audioFile} (BACKUP SYSTEM)`);
+    clientLogger.info(`Starting audio for Team ${getTeamLetter(team)}: ${audioFile} (BACKUP SYSTEM)`);
     
     // Cek apakah audio sudah diputar oleh sistem utama
     if (!isPlayingAudio || currentPlayingAudio !== team) {
@@ -824,25 +897,26 @@ socket.on("playTeamAudio", (data) => {
             timerDuration: timerDuration
         });
         
-        console.log('Audio playback result:', audioSuccess);
+        clientLogger.info('Audio playback result:', audioSuccess);
         
         if (!audioSuccess) {
-            console.warn('Audio playback failed, using fallback');
+            clientLogger.warn('Audio playback failed, using fallback');
             setTimeout(() => {
-                console.log('Executing fallback timer start');
+                clientLogger.info('Executing fallback timer start');
                 fetch(`/audioFinished?action=startTimer&team=${team}&type=team`)
                     .then(r => r.json())
-                    .then(data => console.log('Fallback result:', data))
-                    .catch(e => console.error('Fallback failed:', e));
+                    .then(data => clientLogger.info('Fallback result:', data))
+                    .catch(e => clientLogger.error('Fallback failed:', e));
             }, 1000);
         }
     } else {
-        console.log('Audio sudah diputar oleh sistem utama, mengabaikan backup');
+        clientLogger.info('Audio sudah diputar oleh sistem utama, mengabaikan backup');
     }
 });
 
+// Timer Audio Events
 socket.on("playTimerAudio", (data) => {
-    console.log('Play timer audio:', data);
+    clientLogger.info('Play timer audio:', data);
     const { seconds, audioFile } = data;
     
     timerAudio.putarAudio(audioFile);
@@ -850,7 +924,7 @@ socket.on("playTimerAudio", (data) => {
 
 // HANDLER AUDIO JURI
 socket.on("playJuryAudio", (data) => {
-    console.log('Play jury audio:', data);
+    clientLogger.info('Play jury audio:', data);
     const { isCorrect, audioFile } = data;
 
     juryAudio.putarAudio(audioFile);
@@ -867,111 +941,146 @@ socket.on("playJuryAudio", (data) => {
     }
 });
 
-// Pesan AI
+// ===== PESAN AI DENGAN TYPE SUPPORT =====
 let aiMessageTimeout;
 
 socket.on("aiMessage", (data) => {
-    console.log('AI message:', data);
+    clientLogger.info('AI message:', data);
     const aiMessageEl = document.getElementById("aiMessage");
     const message = data.message;
+    const messageType = data.type || "info"; // Default ke info jika tidak ada type
 
     if (!message) return;
 
     if (aiMessageTimeout) {
         clearTimeout(aiMessageTimeout);
         aiMessageEl.classList.remove("show");
+        aiMessageEl.classList.remove("penalty-message");
+        aiMessageEl.classList.remove("warning-message");
+        aiMessageEl.classList.remove("success-message");
     }
 
     aiMessageEl.textContent = message;
-    aiMessageEl.classList.add("show");
     
-    // Jika pesan mengandung "Waktu habis!" atau "dikurangi", tambahkan class khusus untuk penalti
-    if (message.includes("Waktu habis!") || message.includes("dikurangi")) {
+    // Hapus semua class pesan sebelumnya
+    aiMessageEl.classList.remove("penalty-message", "warning-message", "success-message");
+    
+    // Tambahkan class berdasarkan tipe pesan
+    if (messageType === "penalty") {
         aiMessageEl.classList.add("penalty-message");
+    } else if (messageType === "warning") {
+        aiMessageEl.classList.add("warning-message");
+    } else if (messageType === "success") {
+        aiMessageEl.classList.add("success-message");
     }
+    
+    aiMessageEl.classList.add("show");
     
     aiMessageTimeout = setTimeout(() => {
         aiMessageEl.classList.remove("show");
         aiMessageEl.classList.remove("penalty-message");
+        aiMessageEl.classList.remove("warning-message");
+        aiMessageEl.classList.remove("success-message");
     }, 4000);
 });
 
-// TIMER EVENTS FROM SERVER
+// ===== TIMER EVENTS FROM SERVER =====
 socket.on("timerStart", (data) => {
-    console.log('Timer start:', data);
+    clientLogger.info('Timer start CLIENT:', data, 'at', Date.now());
     if (data.duration) {
+        lastTimerEventTime = Date.now();
         updateTimerDisplay(data.duration);
     }
 });
 
 socket.on("timerUpdate", (data) => {
-    console.log('Timer update:', data);
+    clientLogger.info('Timer update:', data, 'at', Date.now());
+    
+    // Debouncing untuk mencegah update terlalu cepat
+    const now = Date.now();
+    if (now - lastTimerEventTime < TIMER_EVENT_DEBOUNCE) {
+        clientLogger.info('Debouncing timer update, terlalu cepat');
+        return;
+    }
+    
+    lastTimerEventTime = now;
+    
     if (data.timeRemaining !== undefined) {
         updateTimerDisplay(data.timeRemaining);
     }
 });
 
-socket.on("timerEnd", () => {
-    console.log('Timer end received - timer reached 0');
-    updateTimerDisplay(0);
-});
-
 socket.on("timerReset", () => {
-    console.log('Timer reset received - resetting display to 00:00');
-    resetTimerDisplay();
-    resetDisplay();
+    const now = Date.now();
+    clientLogger.info('Timer reset received - resetting display to 00:00 at', now);
+    
+    // Gunakan debouncing untuk mencegah flikering
+    if (timerStableTimeout) {
+        clearTimeout(timerStableTimeout);
+    }
+    
+    timerStableTimeout = setTimeout(() => {
+        resetTimerDisplay(); // Reset ke hijau
+        resetDisplay();
+        clientLogger.info('Timer display reset to 00:00 (green) after debouncing');
+    }, TIMER_EVENT_DEBOUNCE);
 });
 
 // Event untuk system unlocked
 socket.on("systemUnlocked", (data) => {
-    console.log('System unlocked:', data);
+    clientLogger.info('System unlocked:', data);
     
     // Reset tampilan
     resetDisplay();
+    
+    // Reset timer ke hijau
     resetTimerDisplay();
     
     // Tampilkan notifikasi jika ada
     if (data.reason === "timer_expired") {
-        console.log('System unlocked due to timer expiration');
+        clientLogger.info('System unlocked due to timer expiration');
     } else if (data.reason === "auto_penalty_applied") {
-        console.log('System unlocked after auto penalty');
+        clientLogger.info('System unlocked after auto penalty');
     }
 });
 
 // Event untuk timer reset confirm
 socket.on("timerResetConfirm", (data) => {
-    console.log('Timer reset confirmed:', data);
+    clientLogger.info('Timer reset confirmed:', data);
     resetTimerDisplay();
 });
 
 // Event untuk timer status response
 socket.on("timerStatusResponse", (data) => {
-    console.log('Timer status response:', data);
-    if (!data.isRunning) {
-        resetTimerDisplay();
-        if (!data.lockState.locked) {
+    clientLogger.info('Timer status response:', data);
+    if (!data.berjalan) {
+        // Hanya reset jika benar-benar tidak berjalan
+        if (lastTimerValue > 0) {
+            resetTimerDisplay();
+        }
+        if (!data.statusKunci.locked) {
             resetDisplay();
         }
     } else {
-        updateTimerDisplay(data.timeRemaining);
+        updateTimerDisplay(data.waktuTersisa);
     }
 });
 
 // Event untuk auto penalty
 socket.on("autoPenaltyToggle", (data) => {
-    console.log('Auto penalty toggle:', data);
+    clientLogger.info('Auto penalty toggle:', data);
     const status = data.enabled ? 'diaktifkan' : 'dinonaktifkan';
-    console.log(`Penalti otomatis ${status}`);
+    clientLogger.info(`Penalti otomatis ${status}`);
 });
 
 socket.on("autoPenaltyStatus", (data) => {
-    console.log('Auto penalty status:', data);
-    console.log(`Penalti otomatis: ${data.enabled ? 'AKTIF' : 'NONAKTIF'} (${data.penaltyPoints} poin)`);
+    clientLogger.info('Auto penalty status:', data);
+    clientLogger.info(`Penalti otomatis: ${data.enabled ? 'AKTIF' : 'NONAKTIF'} (${data.poinPenalti} poin)`);
 });
 
 socket.on("autoPenaltyConfig", (data) => {
-    console.log('Auto penalty config:', data);
-    console.log(`Konfigurasi penalti: ${data.enabled ? 'AKTIF' : 'NONAKTIF'} (${data.penaltyPoints} poin)`);
+    clientLogger.info('Auto penalty config:', data);
+    clientLogger.info(`Konfigurasi penalti: ${data.diaktifkan ? 'AKTIF' : 'NONAKTIF'} (${data.poinPenalti} poin)`);
 });
 
 // Function untuk request timer reset jika diperlukan
@@ -987,11 +1096,14 @@ function checkTimerStatus() {
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     resetTimerDisplay();
-    console.log('Display initialized - Enhanced debugging enabled');
-    console.log('Fitur penalti otomatis: Siap menerima notifikasi penalti saat timer habis');
+    clientLogger.info('Display initialized - Enhanced debugging enabled');
+    clientLogger.info('Fitur penalti otomatis: Siap menerima notifikasi penalti saat timer habis');
     
     // Check timer status setiap 5 detik untuk sinkronisasi
     setInterval(checkTimerStatus, 5000);
+    
+    // Sync timer dengan server setiap 3 detik
+    setInterval(syncTimerWithServer, 3000);
     
     // Check timer status awal
     setTimeout(checkTimerStatus, 1000);
@@ -999,6 +1111,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Auto-reset safety: jika timer masih stuck setelah 2 menit, reset manual
     setTimeout(() => {
         checkTimerStatus();
-        console.log('Safety check: Verifying timer state...');
+        clientLogger.info('Safety check: Verifying timer state...');
     }, 120000);
 });

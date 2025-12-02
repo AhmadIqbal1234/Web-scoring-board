@@ -64,7 +64,6 @@ body {
   animation: scrollRed 35s linear infinite; /* dari 18s → 35s */
 }
 
-
 @keyframes pulse {
   0%,
   100% {
@@ -106,7 +105,7 @@ body {
 .timer {
   font-size: 3.5rem;
   font-weight: bold;
-  color: #4caf50;
+  color: #4caf50; /* DEFAULT HIJAU */
   font-family: "Courier New", monospace;
   text-shadow: 0 0 15px rgba(76, 175, 80, 0.7);
   transition: all 0.3s ease;
@@ -115,23 +114,47 @@ body {
   background: rgba(0, 0, 0, 0.3);
   padding: 10px 25px;
   border-radius: 15px;
-  border: 3px solid transparent;
+  border: 3px solid #4caf50; /* BORDER HIJAU DEFAULT */
   display: inline-block;
   min-width: 160px;
 }
 
-.timer.warning {
-  color: #ff9800;
-  animation: pulse 1s infinite;
-  text-shadow: 0 0 15px rgba(255, 152, 0, 0.7);
-  border-color: #ff9800;
+/* Timer saat berjalan NORMAL (waktu > 30 detik) */
+.timer.normal {
+  color: #4caf50; /* HIJAU */
+  text-shadow: 0 0 15px rgba(76, 175, 80, 0.7);
+  border-color: #4caf50;
 }
 
+/* Timer PERINGATAN (waktu ≤ 30 detik) */
+.timer.warning {
+  color: #ff9800; /* ORANGE */
+  text-shadow: 0 0 15px rgba(255, 152, 0, 0.7);
+  border-color: #ff9800;
+  animation: pulse 1s infinite;
+}
+
+/* Timer KRITIS (waktu ≤ 10 detik) */
 .timer.critical {
-  color: #f44336;
-  animation: pulse 0.5s infinite;
+  color: #f44336; /* MERAH */
   text-shadow: 0 0 15px rgba(244, 67, 54, 0.7);
   border-color: #f44336;
+  animation: pulse 0.5s infinite;
+}
+
+/* Timer TIDAK AKTIF (00:00) */
+.timer.inactive {
+  color: #4caf50 !important; /* PASTIKAN HIJAU */
+  text-shadow: 0 0 15px rgba(76, 175, 80, 0.7) !important;
+  border-color: #4caf50 !important;
+  animation: none !important; /* MATIKAN ANIMASI */
+}
+
+/* Timer DISABLED/TERPUTUS */
+.timer.disconnected {
+  color: #f44336;
+  border: 2px solid #f44336;
+  animation: blink 1s infinite;
 }
 
 @keyframes pulse {
@@ -143,6 +166,16 @@ body {
   50% {
     opacity: 0.8;
     transform: scale(1.02);
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
   }
 }
 
@@ -361,21 +394,26 @@ main {
   animation: countdownBounce 0.5s ease-out;
 }
 
-/* Style khusus untuk pesan penalti */
+/* Style khusus untuk pesan penalti - TANPA ANIMASI BERKEDIP */
 .ai-message.penalty-message {
   background: linear-gradient(135deg, #ff4444, #cc0000);
   border: 3px solid #ff6b6b;
-  box-shadow: 0 0 30px rgba(255, 0, 0, 0.6);
-  animation: penaltyPulse 1s infinite;
+  box-shadow: 0 0 20px rgba(255, 0, 0, 0.4);
+  /* HAPUS ANIMASI BERKEDIP: animation: penaltyPulse 1s infinite; */
 }
 
-@keyframes penaltyPulse {
-  0%, 100% {
-    box-shadow: 0 0 30px rgba(255, 0, 0, 0.6);
-  }
-  50% {
-    box-shadow: 0 0 40px rgba(255, 0, 0, 0.9);
-  }
+/* Style untuk pesan warning (timer habis tanpa penalti) */
+.ai-message.warning-message {
+  background: linear-gradient(135deg, #ff9800, #ff6b00);
+  border: 3px solid #ff9800;
+  box-shadow: 0 0 20px rgba(255, 152, 0, 0.4);
+}
+
+/* Style untuk pesan success (jawaban benar) */
+.ai-message.success-message {
+  background: linear-gradient(135deg, #4caf50, #2e7d32);
+  border: 3px solid #4caf50;
+  box-shadow: 0 0 20px rgba(76, 175, 80, 0.4);
 }
 
 /* ===== ANIMATIONS ===== */
@@ -679,21 +717,6 @@ footer h5 {
 
 .timer.connected {
   border: 2px solid #4caf50;
-}
-
-.timer.disconnected {
-  border: 2px solid #f44336;
-  animation: blink 1s infinite;
-}
-
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
 }
 
 /* ==== MERAH ==== */
