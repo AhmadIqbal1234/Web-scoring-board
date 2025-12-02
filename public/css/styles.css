@@ -59,8 +59,11 @@ body {
   font-size: 0.9rem;
   font-weight: bold;
   margin-bottom: 0.5rem;
-  animation: pulse 2s infinite;
 }
+.live-indicator.running-text.red .text-content {
+  animation: scrollRed 35s linear infinite; /* dari 18s → 35s */
+}
+
 
 @keyframes pulse {
   0%,
@@ -693,31 +696,27 @@ footer h5 {
   }
 }
 
-.running-text {
+/* ==== MERAH ==== */
+.running-text.red {
   width: 100%;
   overflow: hidden;
-  background: #ffcc66;
-  border-top: 3px solid #ff9900;
-  border-bottom: 3px solid #ff9900;
+  background: #ffcccc;
+  border-top: 3px solid #cc0000;
+  border-bottom: 3px solid #cc0000;
   padding: 8px 0;
-  box-sizing: border-box;
 }
 
-.text-content {
-  display: inline-block;
-  white-space: nowrap;
-  padding-left: 100%;
+.running-text.red .text-content {
+  color: #800000;
   font-size: 18px;
   font-family: Arial, sans-serif;
-  color: #333;
-  animation: scrollText 18s linear infinite;
+  white-space: nowrap;
+  display: inline-block;
+  padding-left: 100%;
+  animation: scrollRed 18s linear infinite;
 }
 
-@keyframes scrollText {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-100%);
-  }
+@keyframes scrollRed {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
 }
