@@ -692,3 +692,32 @@ footer h5 {
     opacity: 0.5;
   }
 }
+
+.running-text {
+  width: 100%;
+  overflow: hidden;
+  background: #ffcc66;
+  border-top: 3px solid #ff9900;
+  border-bottom: 3px solid #ff9900;
+  padding: 8px 0;
+  box-sizing: border-box;
+}
+
+.text-content {
+  display: inline-block;
+  white-space: nowrap;
+  padding-left: 100%;
+  font-size: 18px;
+  font-family: Arial, sans-serif;
+  color: #333;
+  animation: scrollText 18s linear infinite;
+}
+
+@keyframes scrollText {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
