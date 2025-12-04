@@ -1,4 +1,4 @@
-/*quiz-scoring-fast-fixed.ino
+quiz-scoring-fast-fixed.ino
   ESP32 master for Quiz Scoring system – Fixed Hang Issue
   With Watchdog, WiFi Recovery, and I2C Bus Recovery
   Optimized for long-term stability
