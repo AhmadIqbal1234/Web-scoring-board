@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -616,29 +616,30 @@ function forceUnlockSystem() {
 }
 
 // ===== MEMUTAR AUDIO BUZZER DAN TIM =====
+// PERUBAHAN: Timer langsung dimulai tanpa delay
 function playBuzzerThenTeamAudio(team) {
   const teamAudioFile = getTeamAudioFile(team);
   
-  logger.audio(`Memulai urutan audio: buzzer (klien akan lanjut ke ${teamAudioFile})`, { tim: team });
+  logger.audio(`Memulai urutan audio untuk tim ${team}`);
   
+  // Mainkan buzzer audio
   const buzzerPlayed = timerAudio.playPreTeamAudio(team);
   
-  if (!buzzerPlayed) {
-    logger.error('Audio buzzer tidak bisa diputar, langsung ke audio tim');
-    io.emit("playTeamAudio", {
-      team: team,
-      audioFile: teamAudioFile,
-      timerDuration: config.timerDuration
-    });
+  // LANGSUNG mulai timer tanpa menunggu audio
+  if (!isTimerRunning) {
+    startTimer(team);
+    logger.info("Timer langsung dimulai setelah buzzer dipicu", { tim: team });
   }
   
-  // Timer akan dimulai oleh client setelah audio selesai
-  audioFinishTimeout = setTimeout(() => {
-    if (!isTimerRunning) {
-      logger.info("PENGAMAN: Memulai timer setelah 8 detik (audio mungkin gagal)", { tim: team });
-      startTimer(team);
-    }
-  }, 8000);
+  // Audio tim tetap diputar, tapi timer sudah berjalan
+  io.emit("playTeamAudio", {
+    team: team,
+    audioFile: teamAudioFile,
+    timerDuration: config.timerDuration
+  });
+  
+  // Hapus timeout pengaman yang menyebabkan delay 8 detik
+  // audioFinishTimeout = setTimeout(() => { ... }, 8000);
 }
 
 // ===== ENDPOINT TEST KONEKSI ESP32 =====
@@ -981,48 +982,36 @@ app.get("/autoPenaltyStatus", (req, res) => {
 });
 
 // ===== ROUTE UPDATE SKOR =====
+// PERUBAHAN: Optimasi response time
 app.get("/update", async (req, res) => {
   if (!req.query.team) {
-    logger.error('Parameter team tidak ada');
     return res.status(400).json({ error: "Parameter team diperlukan" });
   }
 
   const team = parseInt(req.query.team);
   
   if (!teamToggleState[team - 1]) {
-    logger.error('Tim dinonaktifkan', { tim: team });
     return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
   }
   
   const add = parseInt(req.query.add) || 0;
   const isFirst = req.query.first === "1";
-  const ip = req.ip || req.connection.remoteAddress;
 
-  logger.info('/update dipanggil', { tim: team, tambah: add, pertama: isFirst, ip: ip });
+  // Log minimal untuk kecepatan
+  logger.info('/update', { tim: team, tambah: add, pertama: isFirst });
 
   // Update status ESP32 untuk aktivitas buzzer
+  const ip = req.ip || req.connection.remoteAddress;
   if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
     const activityType = `buzzer_${isFirst ? 'tekan_pertama' : 'scoring'}`;
-    
     updateESP32Status(true, null, ip, activityType);
-    
-    logger.esp32("Aktivitas Buzzer ESP32", {
-      tipe: "buzzer",
-      tim: team,
-      aksi: isFirst ? "tekan_pertama" : "scoring",
-      poin: add,
-      ip: ip,
-      waktu: new Date().toLocaleTimeString('id-ID')
-    });
   }
 
   if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-    logger.error('Tim tidak valid', { tim: team });
     return res.status(400).json({ error: "Tim tidak valid" });
   }
 
   if (lockState.locked && team !== lockState.activeTeam) {
-    logger.error('Tombol terkunci', { tim: team, timAktif: lockState.activeTeam });
     return res.status(403).json({ error: "Tombol terkunci" });
   }
 
@@ -1031,6 +1020,7 @@ app.get("/update", async (req, res) => {
     io.emit("lockstate", lockState);
     io.emit("buzz", { team });
     
+    // Timer langsung dimulai tanpa delay
     playBuzzerThenTeamAudio(team);
   }
 
@@ -1057,6 +1047,7 @@ app.get("/update", async (req, res) => {
     io.emit("lockstate", lockState);
   }
 
+  // Respon cepat
   res.json({ sukses: true, pesan: "OK", tim: team, tambah: add, pertama: isFirst });
 });
 
@@ -1074,10 +1065,7 @@ app.get("/audioFinished", (req, res) => {
   
   if (action === "startTimer" && team && audioType === 'team') {
     if (!isTimerRunning) {
-      logger.info("Memulai timer SETELAH audio tim selesai", { tim: team });
-      startTimer(team);
-    } else {
-      logger.info("Timer sudah berjalan, tidak bisa mulai lagi");
+      logger.info("Timer sudah dimulai lebih awal, abaikan callback", { tim: team });
     }
   }
   

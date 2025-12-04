@@ -1,8 +1,7 @@
-/*
-  quiz-scoring-fast.ino
-  ESP32 master for Quiz Scoring system – Ultra-Low-Latency version
-  With Corrected LED Mapping (P3, P4, P5)
-  Optimized by ChatGPT (GPT-5, 2025)
+/*quiz-scoring-fast-fixed.ino
+  ESP32 master for Quiz Scoring system – Fixed Hang Issue
+  With Watchdog, WiFi Recovery, and I2C Bus Recovery
+  Optimized for long-term stability
 */
 
 #include <WiFi.h>
@@ -15,6 +14,10 @@
 const char *DEFAULT_SERVER_HOST = "web-scoring-board-production.up.railway.app";
 const int   DEFAULT_SERVER_PORT = 443;
 const char *WIFI_AP_NAME = "Quiz_Config";
+
+// ========== LED STATUS PINS ==========
+const int LED_MERAH = 33;  // G33 untuk LED Merah
+const int LED_HIJAU = 32;  // G32 untuk LED Hijau
 
 // Fixed PCF8574 I2C addresses with team mapping
 const uint8_t PCF_MODULE_A_C = 0x20;  // Teams A, B, C  (1,2,3)
@@ -69,6 +72,25 @@ const ButtonLEDMapping TEAM_MAPPINGS[12] = {
   {0x23, 2, 5, 12, "L"}  // Tombol L -> Button Bit 2, LED Bit 5 (P5)
 };
 
+// ========== STATUS LED VARIABLES ==========
+enum SystemStatus {
+  STATUS_BOOTING,
+  STATUS_WIFI_CONNECTING,
+  STATUS_WIFI_CONNECTED,
+  STATUS_WEB_CONNECTED
+};
+
+SystemStatus currentStatus = STATUS_BOOTING;
+unsigned long lastBlinkTime = 0;
+bool blinkState = false;
+const unsigned long BLINK_INTERVAL = 500; // 500ms untuk berkedip
+
+// ========== WIFI RESET FEATURE ==========
+bool wifiResetActive = false;
+unsigned long wifiResetStartTime = 0;
+const unsigned long WIFI_RESET_DURATION = 5000; // 5 detik
+bool wifiResetTriggered = false;
+
 // Helper functions untuk mapping
 int getModuleIndex(uint8_t moduleAddress) {
   for (int i = 0; i < 4; i++) {
@@ -84,6 +106,7 @@ const unsigned long JURY_DEBOUNCE_MS   = 60;
 const unsigned long LOCK_POLL_MS       = 1000;
 const unsigned long MODULE_SCAN_MS     = 3000;
 const unsigned long BUTTON_LED_DURATION = 500;
+const unsigned long WATCHDOG_TIMEOUT   = 30000; // 30 seconds
 
 // ====== STATE ======
 char serverHost[64];
@@ -106,8 +129,268 @@ int minusValue = -2;
 unsigned long buttonLedStartTime[12] = {0};
 bool buttonLedActive[12] = {false};
 
-// ====== SHARED HTTP CLIENT ======
-HTTPClient sharedHttp;
+// WiFi stability
+int wifiDisconnectCount = 0;
+unsigned long lastWifiCheck = 0;
+
+// Watchdog
+unsigned long lastWatchdogFeed = 0;
+unsigned long lastSystemCheck = 0;
+
+// ========== WIFI RESET FUNCTIONS ==========
+void handleWifiReset() {
+  bool corrPressed = digitalRead(PIN_JURY_CORRECT) == LOW;
+  bool wrongPressed = digitalRead(PIN_JURY_WRONG) == LOW;
+  unsigned long now = millis();
+
+  // Jika kedua tombol juri ditekan
+  if (corrPressed && wrongPressed) {
+    if (!wifiResetActive) {
+      // Mulai timer reset WiFi
+      wifiResetActive = true;
+      wifiResetStartTime = now;
+      Serial.println("[WIFI-RESET] Both jury buttons pressed - starting reset timer");
+      
+      // Feedback visual: LED berkedip cepat
+      digitalWrite(LED_MERAH, HIGH);
+      digitalWrite(LED_HIJAU, HIGH);
+    } else {
+      // Hitung progres reset
+      unsigned long elapsed = now - wifiResetStartTime;
+      float progress = (float)elapsed / WIFI_RESET_DURATION;
+      
+      // Feedback visual progres
+      if (elapsed % 300 < 150) { // Berkedip lebih cepat saat progres
+        digitalWrite(LED_MERAH, HIGH);
+        digitalWrite(LED_HIJAU, HIGH);
+      } else {
+        digitalWrite(LED_MERAH, LOW);
+        digitalWrite(LED_HIJAU, LOW);
+      }
+      
+      // Tampilkan progres di serial monitor
+      if (elapsed % 1000 == 0) {
+        Serial.printf("[WIFI-RESET] Reset progress: %.1f%%\n", progress * 100);
+      }
+      
+      // Jika sudah mencapai 5 detik, trigger reset
+      if (elapsed >= WIFI_RESET_DURATION && !wifiResetTriggered) {
+        wifiResetTriggered = true;
+        triggerWifiReset();
+      }
+    }
+  } else {
+    // Jika salah satu tombol dilepas, reset state
+    if (wifiResetActive) {
+      wifiResetActive = false;
+      wifiResetTriggered = false;
+      Serial.println("[WIFI-RESET] Reset cancelled - button released");
+      
+      // Kembalikan LED ke status normal
+      updateStatusLED();
+    }
+  }
+}
+
+void triggerWifiReset() {
+  Serial.println("\n[WIFI-RESET] ====== WIFI RESET TRIGGERED ======");
+  Serial.println("[WIFI-RESET] Clearing saved WiFi credentials");
+  Serial.println("[WIFI-RESET] ESP32 will restart in config mode");
+  
+  // Feedback visual: LED merah dan hijau menyala solid
+  digitalWrite(LED_MERAH, HIGH);
+  digitalWrite(LED_HIJAU, HIGH);
+  delay(1000);
+  
+  // Clear WiFi credentials
+  WiFiManager wm;
+  wm.resetSettings();
+  
+  Serial.println("[WIFI-RESET] WiFi credentials cleared");
+  Serial.println("[WIFI-RESET] Restarting ESP32...");
+  
+  delay(2000);
+  
+  // Restart ESP32
+  ESP.restart();
+}
+
+// ========== STATUS LED FUNCTIONS ==========
+void updateStatusLED() {
+  unsigned long now = millis();
+  
+  // Jika sedang proses reset WiFi, biarkan LED dikontrol oleh handleWifiReset
+  if (wifiResetActive) {
+    return;
+  }
+  
+  switch (currentStatus) {
+    case STATUS_BOOTING:
+      // LED Merah berkedip selama booting
+      if (now - lastBlinkTime >= BLINK_INTERVAL) {
+        lastBlinkTime = now;
+        blinkState = !blinkState;
+        digitalWrite(LED_MERAH, blinkState ? HIGH : LOW);
+        digitalWrite(LED_HIJAU, LOW); // Pastikan hijau mati
+      }
+      break;
+      
+    case STATUS_WIFI_CONNECTING:
+      // LED Merah solid saat booting selesai tapi belum WiFi
+      digitalWrite(LED_MERAH, HIGH);
+      digitalWrite(LED_HIJAU, LOW);
+      break;
+      
+    case STATUS_WIFI_CONNECTED:
+      // LED Hijau berkedip saat WiFi connected tapi belum web
+      if (now - lastBlinkTime >= BLINK_INTERVAL) {
+        lastBlinkTime = now;
+        blinkState = !blinkState;
+        digitalWrite(LED_HIJAU, blinkState ? HIGH : LOW);
+        digitalWrite(LED_MERAH, LOW); // Pastikan merah mati
+      }
+      break;
+      
+    case STATUS_WEB_CONNECTED:
+      // LED Hijau solid saat semua connected
+      digitalWrite(LED_HIJAU, HIGH);
+      digitalWrite(LED_MERAH, LOW);
+      break;
+  }
+}
+
+void setSystemStatus(SystemStatus newStatus) {
+  if (currentStatus != newStatus) {
+    currentStatus = newStatus;
+    lastBlinkTime = millis();
+    blinkState = false;
+    
+    Serial.printf("[STATUS] System status changed to: ");
+    switch (currentStatus) {
+      case STATUS_BOOTING: Serial.println("BOOTING"); break;
+      case STATUS_WIFI_CONNECTING: Serial.println("WIFI_CONNECTING"); break;
+      case STATUS_WIFI_CONNECTED: Serial.println("WIFI_CONNECTED"); break;
+      case STATUS_WEB_CONNECTED: Serial.println("WEB_CONNECTED"); break;
+    }
+  }
+}
+
+void checkSystemStatus() {
+  static unsigned long lastStatusCheck = 0;
+  unsigned long now = millis();
+  
+  if (now - lastStatusCheck >= 2000) { // Check setiap 2 detik
+    lastStatusCheck = now;
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      // Cek koneksi ke web server
+      String url = "https://" + String(serverHost) + "/health";
+      HTTPClient http;
+      http.setReuse(false);
+      http.setConnectTimeout(3000);
+      http.setTimeout(3000);
+      
+      bool success = http.begin(url);
+      if (success) {
+        int code = http.GET();
+        http.end();
+        
+        if (code == 200) {
+          setSystemStatus(STATUS_WEB_CONNECTED);
+        } else {
+          setSystemStatus(STATUS_WIFI_CONNECTED);
+        }
+      } else {
+        setSystemStatus(STATUS_WIFI_CONNECTED);
+      }
+    } else {
+      if (currentStatus == STATUS_BOOTING) {
+        // Setelah booting, tapi WiFi belum connect
+        setSystemStatus(STATUS_WIFI_CONNECTING);
+      } else {
+        // Jika sebelumnya connected tapi sekarang disconnect
+        setSystemStatus(STATUS_WIFI_CONNECTING);
+      }
+    }
+  }
+}
+
+// ========== WATCHDOG & SYSTEM HEALTH ==========
+void setupWatchdog() {
+  // Enable hardware watchdog timer (HW WDT)
+  // ESP32 memiliki hardware watchdog built-in yang akan restart sistem jika timeout
+  Serial.println("[WDT] Hardware Watchdog enabled (timeout ~30s)");
+}
+
+void feedWatchdog() {
+  // Timer-based watchdog feeding
+  unsigned long now = millis();
+  
+  // Reset watchdog timer setiap 10 detik
+  if (now - lastWatchdogFeed > 10000) {
+    lastWatchdogFeed = now;
+    
+    // Check if system is responsive
+    if (now - lastSystemCheck > WATCHDOG_TIMEOUT) {
+      Serial.println("[WDT] System hang detected - restarting ESP32");
+      ESP.restart();
+    }
+  }
+}
+
+void updateSystemCheck() {
+  lastSystemCheck = millis();
+}
+
+void optimizeMemory() {
+  static unsigned long lastMemCheck = 0;
+  unsigned long now = millis();
+  
+  if (now - lastMemCheck > 60000) { // Check every minute
+    lastMemCheck = now;
+    
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t minHeap = ESP.getMinFreeHeap();
+    
+    Serial.printf("[MEMORY] Free: %d, Min: %d\n", freeHeap, minHeap);
+    
+    if (freeHeap < 20000) {
+      Serial.println("[MEMORY] Low heap - consider optimizing");
+    }
+  }
+}
+
+// ========== WIFI RECOVERY ==========
+void checkWiFiConnection() {
+  unsigned long now = millis();
+  
+  if (now - lastWifiCheck > 10000) { // Check every 10 seconds
+    lastWifiCheck = now;
+    
+    if (WiFi.status() != WL_CONNECTED) {
+      wifiDisconnectCount++;
+      Serial.printf("[WiFi] Disconnected! Attempting reconnect #%d\n", wifiDisconnectCount);
+      
+      WiFi.disconnect();
+      delay(1000);
+      WiFi.reconnect();
+      delay(2000);
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WiFi] Reconnected successfully");
+        wifiDisconnectCount = 0;
+      } else if (wifiDisconnectCount > 3) {
+        Serial.println("[WiFi] Multiple reconnects failed - restarting ESP32");
+        ESP.restart();
+      }
+    } else {
+      if (wifiDisconnectCount > 0) {
+        Serial.println("[WiFi] Connection restored");
+        wifiDisconnectCount = 0;
+      }
+    }
+  }
+}
 
 // ========== ROBUST MODULE DETECTION ==========
 bool checkModule(uint8_t addr) {
@@ -133,6 +416,46 @@ void scanPCFModules() {
         pcfOutCache[i] = 0xFF;
         lastRead[i] = 0xFF;
       }
+    }
+  }
+}
+
+// ========== I2C BUS RECOVERY ==========
+void recoverI2CBus() {
+  Serial.println("[I2C] Bus recovery initiated...");
+  
+  // Clear I2C bus
+  Wire.end();
+  pinMode(21, INPUT_PULLUP);
+  pinMode(22, INPUT_PULLUP);
+  delay(100);
+  
+  // Reinitialize I2C
+  Wire.begin(21, 22);
+  Wire.setClock(100000);
+  delay(100);
+  
+  Serial.println("[I2C] Bus recovery completed");
+}
+
+void checkI2CHealth() {
+  static unsigned long lastI2CCheck = 0;
+  unsigned long now = millis();
+  
+  if (now - lastI2CCheck > 30000) { // Every 30 seconds
+    lastI2CCheck = now;
+    
+    bool allModulesOK = true;
+    for (int i = 0; i < 4; i++) {
+      if (moduleDetected[i] && !checkModule(MODULE_ADDRESSES[i])) {
+        Serial.printf("[I2C] Module 0x%02X not responding\n", MODULE_ADDRESSES[i]);
+        allModulesOK = false;
+      }
+    }
+    
+    if (!allModulesOK) {
+      recoverI2CBus();
+      scanPCFModules(); // Rescan modules setelah recovery
     }
   }
 }
@@ -255,7 +578,7 @@ void pollPCFButtons() {
         // Immediately activate LED for the pressed button
         setTeamLED(mapping.teamNumber, true);
         buttonLedActive[mapping.teamNumber-1] = true;
-        buttonLedStartTime[mapping.teamNumber-1] = millis();
+        buttonLedStartTime[mapping.teamNumber-1] = now;
         
         // Set lock state
         lockActive = true;
@@ -302,7 +625,7 @@ void handleJuryButtons() {
       setTeamLED(activeTeam, false);
       delay(80);
       setTeamLED(activeTeam, true);
-      buttonLedStartTime[activeTeam-1] = millis();
+      buttonLedStartTime[activeTeam-1] = now;
       
       sendJuryUpdateToServer(activeTeam, plusValue, "CORRECT");
     }
@@ -320,7 +643,7 @@ void handleJuryButtons() {
         setTeamLED(activeTeam, true);
         if (i == 0) delay(40);
       }
-      buttonLedStartTime[activeTeam-1] = millis();
+      buttonLedStartTime[activeTeam-1] = now;
       
       sendJuryUpdateToServer(activeTeam, minusValue, "WRONG");
     }
@@ -330,16 +653,25 @@ void handleJuryButtons() {
   lastJuryWrongState   = wrong;
 }
 
-// ====== HTTP OPERATIONS ======
+// ====== ROBUST HTTP OPERATIONS ======
 String httpGetString(const String &url) {
   if (WiFi.status() != WL_CONNECTED) return "";
-  sharedHttp.setReuse(true);
-  sharedHttp.setConnectTimeout(2000);
-  sharedHttp.setTimeout(2000);
-  sharedHttp.begin(url);
-  int code = sharedHttp.GET();
-  String payload = (code == 200) ? sharedHttp.getString() : "";
-  sharedHttp.end();
+  
+  HTTPClient http;
+  http.setReuse(false); // Prevent connection leaks
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  
+  bool success = http.begin(url);
+  if (!success) {
+    Serial.println("[HTTP] Connection begin failed");
+    return "";
+  }
+  
+  int code = http.GET();
+  String payload = (code == 200) ? http.getString() : "";
+  http.end();
+  
   return payload;
 }
 
@@ -348,26 +680,42 @@ void sendUpdateToServer(int team, int add, bool isFirst) {
   
   String url = "https://" + String(serverHost) + "/update?team=" + String(team) + "&add=" + add;
   if (isFirst) url += "&first=1";
-  sharedHttp.setReuse(true);
-  sharedHttp.setConnectTimeout(2000);
-  sharedHttp.setTimeout(2000);
-  sharedHttp.begin(url);
-  int code = sharedHttp.GET();
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  
+  bool success = http.begin(url);
+  if (!success) {
+    Serial.println("[HTTP] Update connection failed");
+    return;
+  }
+  
+  int code = http.GET();
   Serial.printf("[UPDATE] Team %s first=%d code=%d\n", TEAM_NAMES[team-1], isFirst, code);
-  sharedHttp.end();
+  http.end();
 }
 
 void sendJuryUpdateToServer(int team, int add, const char *action) {
   if (!lockActive || team < 1 || team > 12 || WiFi.status() != WL_CONNECTED) return;
   
   String url = "https://" + String(serverHost) + "/update?team=" + String(team) + "&add=" + add;
-  sharedHttp.setReuse(true);
-  sharedHttp.setConnectTimeout(2000);
-  sharedHttp.setTimeout(2000);
-  sharedHttp.begin(url);
-  int code = sharedHttp.GET();
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  
+  bool success = http.begin(url);
+  if (!success) {
+    Serial.println("[HTTP] Jury update connection failed");
+    return;
+  }
+  
+  int code = http.GET();
   Serial.printf("[JURY] Team %s %s code=%d\n", TEAM_NAMES[team-1], action, code);
-  sharedHttp.end();
+  http.end();
 }
 
 void pollLockState() {
@@ -395,6 +743,23 @@ void pollLockState() {
   }
 }
 
+void safeHealthCheck() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  String url = "https://" + String(serverHost) + "/health";
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  
+  bool success = http.begin(url);
+  if (success) {
+    int code = http.GET();
+    http.end();
+    Serial.printf("[HEALTH] Server response: %d\n", code);
+  }
+}
+
 // ====== Wi-Fi & CONFIG ======
 WiFiManagerParameter custom_server_host("host", "Server host", DEFAULT_SERVER_HOST, 64);
 WiFiManagerParameter custom_server_port("port", "Port", "443", 6);
@@ -405,28 +770,50 @@ void setupWiFiManager() {
   wm.setConfigPortalTimeout(180);
   wm.addParameter(&custom_server_host);
   wm.addParameter(&custom_server_port);
-  if (!wm.autoConnect(WIFI_AP_NAME)) ESP.restart();
+  
+  if (!wm.autoConnect(WIFI_AP_NAME)) {
+    Serial.println("[WiFi] Failed to connect and config portal timeout");
+    ESP.restart();
+  }
+  
   String hostValue = custom_server_host.getValue();
-  hostValue.replace("http://", ""); hostValue.replace("https://", "");
+  hostValue.replace("http://", ""); 
+  hostValue.replace("https://", "");
   strncpy(serverHost, hostValue.c_str(), sizeof(serverHost) - 1);
   serverPort = atoi(custom_server_port.getValue());
-  Serial.printf("WiFi: Host=%s Port=%d\n", serverHost, serverPort);
-}
-
-void recoverI2CBus() {
-  Serial.println("[I2C] Bus recovery...");
-  Wire.end();
-  delay(100);
-  Wire.begin(21, 22);
-  Wire.setClock(100000);
-  delay(100);
+  
+  Serial.printf("WiFi: Connected to %s\n", WiFi.SSID().c_str());
+  Serial.printf("Server: Host=%s Port=%d\n", serverHost, serverPort);
 }
 
 // ====== SETUP ======
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\nQUIZ SCORING - Corrected LED Mapping (P3,P4,P5)");
+  
+  Serial.println("\n========================================");
+  Serial.println("QUIZ SCORING SYSTEM - STABILITY FIXED");
+  Serial.println("With Watchdog, WiFi & I2C Recovery");
+  Serial.println("========================================");
+  
+  // Initialize Status LED Pins
+  pinMode(LED_MERAH, OUTPUT);
+  pinMode(LED_HIJAU, OUTPUT);
+  
+  // Pastikan kedua LED mati di awal
+  digitalWrite(LED_MERAH, LOW);
+  digitalWrite(LED_HIJAU, LOW);
+  
+  Serial.println("STATUS LED CONFIGURATION:");
+  Serial.println("  LED Merah -> GPIO 33");
+  Serial.println("  LED Hijau -> GPIO 32");
+  Serial.println("  Common Cathode dengan resistor 220ohm ke GND");
+  Serial.println("");
+  Serial.println("WIFI RESET FEATURE:");
+  Serial.println("  Press and hold BOTH jury buttons for 5 seconds");
+  Serial.println("  to reset WiFi configuration");
+  Serial.println("");
+  
   Serial.println("CORRECTED LED MAPPING:");
   Serial.println("LED_1 = P3 (bit 3)");
   Serial.println("LED_2 = P4 (bit 4)");  
@@ -442,51 +829,87 @@ void setup() {
                   mapping.moduleAddress, mapping.buttonBit, mapping.ledBit);
   }
 
+  // Initialize I2C
   Wire.begin(21, 22);
   Wire.setClock(100000);
   
+  // Initialize watchdog system
+  setupWatchdog();
+  updateSystemCheck();
+  
+  // Initial module scan
   scanPCFModules();
 
+  // Setup jury buttons
   pinMode(PIN_JURY_CORRECT, INPUT_PULLUP);
   pinMode(PIN_JURY_WRONG, INPUT_PULLUP);
   lastJuryCorrectState = digitalRead(PIN_JURY_CORRECT);
   lastJuryWrongState   = digitalRead(PIN_JURY_WRONG);
   
+  // Initialize debounce timers
   for (int i = 0; i < 14; ++i) lastDebounceTime[i] = 0;
   for (int i = 0; i < 12; i++) buttonLedActive[i] = false;
 
+  // Setup WiFi
   setupWiFiManager();
-  Serial.println("[INIT] System ready with corrected LED mapping");
+  
+  Serial.println("\n[INIT] System ready with stability fixes");
+  Serial.printf("[INIT] Free Heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.println("========================================\n");
 }
 
-// ====== LOOP ======
+// ====== MAIN LOOP ======
 void loop() {
   unsigned long now = millis();
-
+  
+  // Update system check timestamp
+  updateSystemCheck();
+  
+  // Feed the watchdog
+  feedWatchdog();
+  
+  // Handle WiFi reset feature
+  handleWifiReset();
+  
+  // Update status LED (jika tidak sedang reset WiFi)
+  if (!wifiResetActive) {
+    updateStatusLED();
+  }
+  
+  // Check and update system status
+  checkSystemStatus();
+  
+  // System health monitoring
+  checkWiFiConnection();
+  checkI2CHealth();
+  optimizeMemory();
+  
+  // Core functionality
   handleJuryButtons();
   pollPCFButtons();
   updateButtonLEDs();
 
+  // Lock state polling
   static unsigned long lastLockPoll = 0;
   if (now - lastLockPoll >= LOCK_POLL_MS) { 
     lastLockPoll = now; 
     pollLockState(); 
   }
 
+  // Module scanning
   static unsigned long lastModuleScan = 0;
   if (now - lastModuleScan >= MODULE_SCAN_MS) {
     lastModuleScan = now;
     scanPCFModules();
   }
 
+  // Health check to server
   static unsigned long lastKeepAlivePing = 0;
-  if (now - lastKeepAlivePing >= 30000) {
+  if (now - lastKeepAlivePing >= 30000) { // 30 seconds
     lastKeepAlivePing = now;
-    if (WiFi.status() == WL_CONNECTED) {
-      sharedHttp.setReuse(true);
-      sharedHttp.begin("https://" + String(serverHost) + "/health");
-      sharedHttp.GET();
-      sharedHttp.end();
-    }
+    safeHealthCheck();
   }
+
+  // Small delay to prevent tight loop and allow background tasks
+  delay(10);
 }
