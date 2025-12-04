@@ -177,7 +177,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// ===== UPDATE STATUS ESP32 =====
+// ===== UPDATE STATUS ESP32 (PERBAIKAN UTAMA) =====
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -248,6 +248,9 @@ function updateESP32Status(status) {
     esp32SocketId.textContent = esp32Status.socketId || "Koneksi HTTP";
   }
   
+  // ===== PERBAIKAN: UPDATE TIMESTAMP REAL-TIME =====
+  updateESP32Timestamp();
+  
   // Hanya tampilkan notifikasi jika status berubah
   if (sebelumnyaOnline !== sekarangOnline) {
     const pesan = sekarangOnline ? 
@@ -260,7 +263,34 @@ function updateESP32Status(status) {
   }
 }
 
-// ===== INISIALISASI KONTROL ESP32 =====
+// ===== FUNGSI BARU: UPDATE TIMESTAMP ESP32 =====
+function updateESP32Timestamp() {
+  const now = new Date();
+  const lastActivity = esp32Status.lastActivity ? new Date(esp32Status.lastActivity) : null;
+  
+  if (lastActivity) {
+    const timeDiff = Math.floor((now - lastActivity) / 1000);
+    const timestampElement = document.getElementById("esp32Timestamp");
+    
+    if (timestampElement) {
+      if (timeDiff < 10) {
+        timestampElement.textContent = "Baru saja";
+        timestampElement.style.color = "#4caf50";
+      } else if (timeDiff < 60) {
+        timestampElement.textContent = `${timeDiff} detik lalu`;
+        timestampElement.style.color = "#ff9800";
+      } else if (timeDiff < 3600) {
+        timestampElement.textContent = `${Math.floor(timeDiff / 60)} menit lalu`;
+        timestampElement.style.color = "#ff9800";
+      } else {
+        timestampElement.textContent = `${Math.floor(timeDiff / 3600)} jam lalu`;
+        timestampElement.style.color = "#f44336";
+      }
+    }
+  }
+}
+
+// ===== INISIALISASI KONTROL ESP32 (PERBAIKAN UTAMA) =====
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -273,15 +303,55 @@ function initializeESP32Controls() {
     testBtn.addEventListener("click", testESP32Connection);
   }
   
-  // Auto-refresh status setiap 30 detik (tidak terlalu sering)
-  setInterval(refreshESP32Status, 30000);
+  // ===== PERBAIKAN: POLLING REAL-TIME =====
+  startESP32RealTimePolling();
   
   // Refresh saat halaman terlihat
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) {
       refreshESP32Status();
+      // Request status ESP32 dari server
+      socket.emit("getESP32Status");
     }
   });
+}
+
+// ===== FUNGSI BARU: POLLING STATUS ESP32 REAL-TIME =====
+function startESP32RealTimePolling() {
+  // Polling setiap 3 detik untuk status terbaru
+  setInterval(() => {
+    // Request status dari server via socket
+    socket.emit("getESP32Status");
+    
+    // Juga ambil via HTTP sebagai fallback
+    fetch('/esp32status')
+      .then(r => r.json())
+      .then(data => {
+        updateESP32Status(data);
+        
+        // Periksa jika ESP32 offline tapi baru saja ada aktivitas
+        const now = new Date();
+        const lastActivity = data.aktivitasTerakhir ? new Date(data.aktivitasTerakhir) : null;
+        
+        if (lastActivity && (now - lastActivity < 30000)) { // 30 detik terakhir
+          // ESP32 aktif dalam 30 detik terakhir
+          if (!data.terhubung) {
+            // Perbaiki status jika salah
+            updateESP32Status({
+              ...data,
+              connected: true,
+              connectionType: "recent_activity_detected"
+            });
+          }
+        }
+      })
+      .catch(err => {
+        console.error('ESP32 polling error:', err);
+      });
+  }, 3000); // Setiap 3 detik
+  
+  // Update timestamp setiap detik
+  setInterval(updateESP32Timestamp, 1000);
 }
 
 // ===== REFRESH STATUS ESP32 =====
@@ -327,21 +397,21 @@ function testESP32Connection() {
       const resultDiv = document.getElementById("esp32TestResult");
       if (resultDiv) {
         resultDiv.style.display = 'block';
-        resultDiv.className = `connection-test-result ${data.success ? 'success' : 'error'}`;
+        resultDiv.className = `connection-test-result ${data.sukses ? 'success' : 'error'}`;
         
-        if (data.success) {
+        if (data.sukses) {
           resultDiv.innerHTML = `
             <strong>✅ TEST BERHASIL</strong><br>
-            <small>${data.message}</small><br>
+            <small>${data.pesan}</small><br>
             <small>Tipe: ${data.tipeKoneksi}</small>
             ${data.waktuRespon ? `<br><small>Respon: ${data.waktuRespon}</small>` : ''}
-            ${data.detail ? `<br><small>${data.detail}</small>` : ''}
+            ${data.detail ? `<br><small>${JSON.stringify(data.detail)}</small>` : ''}
           `;
           showNotification("✅ ESP32 ONLINE - Terhubung dengan baik!", "success");
         } else {
           resultDiv.innerHTML = `
             <strong>❌ TEST GAGAL</strong><br>
-            <small>${data.message}</small><br>
+            <small>${data.pesan}</small><br>
             <small>Tipe: ${data.tipeKoneksi}</small>
             ${data.saran ? `<br><small>${data.saran}</small>` : ''}
           `;
@@ -356,7 +426,7 @@ function testESP32Connection() {
       
       // Update status ESP32 di UI
       updateESP32Status({
-        connected: data.success,
+        connected: data.sukses,
         lastActivity: new Date(),
         connectionType: data.tipeKoneksi
       });
@@ -919,7 +989,7 @@ function updateTimerStatus(state, seconds) {
     adminLogger.info('Status timer diperbarui', { state: state, detik: seconds });
 }
 
-// ===== SOCKET EVENTS UNTUK ESP32 =====
+// ===== SOCKET EVENTS UNTUK ESP32 (PERBAIKAN UTAMA) =====
 socket.on("esp32Status", (status) => {
     adminLogger.event('esp32Status', status);
     updateESP32Status(status);
@@ -927,11 +997,18 @@ socket.on("esp32Status", (status) => {
 
 socket.on("esp32Activity", (activity) => {
     adminLogger.event('esp32Activity', activity);
-    updateESP32Status({
+    
+    // Update status dengan aktivitas terbaru
+    const updatedStatus = {
+        ...esp32Status,
         lastActivity: activity.timestamp,
         socketId: activity.socketId,
-        ip: activity.ip
-    });
+        ip: activity.ip,
+        connected: true,
+        connectionType: activity.activity?.type || "activity"
+    };
+    
+    updateESP32Status(updatedStatus);
     
     if (activity.activity && activity.activity.type === 'buzzer') {
         showNotification(`ESP32: Tombol ditekan - Tim ${getTeamLetter(activity.activity.team)}`, "info");
@@ -943,13 +1020,13 @@ socket.on("esp32Activity", (activity) => {
 // ===== SOCKET EVENTS UNTUK PENALTI OTOMATIS =====
 socket.on("autoPenaltyToggle", (data) => {
     adminLogger.event('autoPenaltyToggle', data);
-    autoPenaltyEnabled = data.diaktifkan;
+    autoPenaltyEnabled = data.enabled;
     updateAutoPenaltyUI();
     
-    const message = data.diaktifkan ? 
+    const message = data.enabled ? 
         'Penalti otomatis diaktifkan' : 
         'Penalti otomatis dinonaktifkan';
-    showNotification(message, data.diaktifkan ? "success" : "warning");
+    showNotification(message, data.enabled ? "success" : "warning");
 });
 
 socket.on("autoPenaltyConfig", (data) => {
@@ -1177,7 +1254,8 @@ function initializeAdmin() {
 // ===== MEMULAI SAAT DOKUMEN SIAP =====
 document.addEventListener('DOMContentLoaded', function() {
     adminLogger.info('Panel admin diinisialisasi...');
-    adminLogger.esp32('Sistem monitoring ESP32 diaktifkan');
+    adminLogger.esp32('Sistem monitoring ESP32 REAL-TIME diaktifkan');
+    adminLogger.esp32('Polling setiap 3 detik untuk status ESP32');
     initializeAdmin();
     
     try {

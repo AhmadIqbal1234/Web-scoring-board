@@ -1,7 +1,7 @@
-quiz-scoring-fast-fixed.ino
-  ESP32 master for Quiz Scoring system – Fixed Hang Issue
-  With Watchdog, WiFi Recovery, and I2C Bus Recovery
-  Optimized for long-term stability
+/*
+  ESP32 master for Quiz Scoring system – ATOMIC FIXED VERSION
+  Dengan global lock untuk mencegah race condition
+  Hanya tim pertama yang akan terkunci meskipun ada multiple press
 */
 
 #include <WiFi.h>
@@ -40,7 +40,7 @@ const char* TEAM_NAMES[12] = {
 const int PIN_JURY_CORRECT = 4;
 const int PIN_JURY_WRONG   = 5;
 
-// ====== CORRECTED BUTTON-LED MAPPING ======
+// ====== BUTTON-LED MAPPING ======
 struct ButtonLEDMapping {
   uint8_t moduleAddress;  // Alamat I2C module
   uint8_t buttonBit;      // Bit untuk tombol (0-2)
@@ -49,27 +49,26 @@ struct ButtonLEDMapping {
   const char* teamName;   // Nama tim
 };
 
-// CORRECTED MAPPING - LED menggunakan P3, P4, P5
 const ButtonLEDMapping TEAM_MAPPINGS[12] = {
   // Module 0x20 - Teams A, B, C
-  {0x20, 0, 3, 1, "A"},  // Tombol A -> Button Bit 0, LED Bit 3 (P3)
-  {0x20, 1, 4, 2, "B"},  // Tombol B -> Button Bit 1, LED Bit 4 (P4)
-  {0x20, 2, 5, 3, "C"},  // Tombol C -> Button Bit 2, LED Bit 5 (P5)
+  {0x20, 0, 3, 1, "A"},
+  {0x20, 1, 4, 2, "B"},
+  {0x20, 2, 5, 3, "C"},
   
   // Module 0x21 - Teams D, E, F
-  {0x21, 0, 3, 4, "D"},  // Tombol D -> Button Bit 0, LED Bit 3 (P3)
-  {0x21, 1, 4, 5, "E"},  // Tombol E -> Button Bit 1, LED Bit 4 (P4)
-  {0x21, 2, 5, 6, "F"},  // Tombol F -> Button Bit 2, LED Bit 5 (P5)
+  {0x21, 0, 3, 4, "D"},
+  {0x21, 1, 4, 5, "E"},
+  {0x21, 2, 5, 6, "F"},
   
   // Module 0x22 - Teams G, H, I
-  {0x22, 0, 3, 7, "G"},  // Tombol G -> Button Bit 0, LED Bit 3 (P3)
-  {0x22, 1, 4, 8, "H"},  // Tombol H -> Button Bit 1, LED Bit 4 (P4)
-  {0x22, 2, 5, 9, "I"},  // Tombol I -> Button Bit 2, LED Bit 5 (P5)
+  {0x22, 0, 3, 7, "G"},
+  {0x22, 1, 4, 8, "H"},
+  {0x22, 2, 5, 9, "I"},
   
   // Module 0x23 - Teams J, K, L
-  {0x23, 0, 3, 10, "J"}, // Tombol J -> Button Bit 0, LED Bit 3 (P3)
-  {0x23, 1, 4, 11, "K"}, // Tombol K -> Button Bit 1, LED Bit 4 (P4)
-  {0x23, 2, 5, 12, "L"}  // Tombol L -> Button Bit 2, LED Bit 5 (P5)
+  {0x23, 0, 3, 10, "J"},
+  {0x23, 1, 4, 11, "K"},
+  {0x23, 2, 5, 12, "L"}
 };
 
 // ========== STATUS LED VARIABLES ==========
@@ -83,30 +82,30 @@ enum SystemStatus {
 SystemStatus currentStatus = STATUS_BOOTING;
 unsigned long lastBlinkTime = 0;
 bool blinkState = false;
-const unsigned long BLINK_INTERVAL = 500; // 500ms untuk berkedip
+const unsigned long BLINK_INTERVAL = 500;
 
 // ========== WIFI RESET FEATURE ==========
 bool wifiResetActive = false;
 unsigned long wifiResetStartTime = 0;
-const unsigned long WIFI_RESET_DURATION = 5000; // 5 detik
+const unsigned long WIFI_RESET_DURATION = 5000;
 bool wifiResetTriggered = false;
 
-// Helper functions untuk mapping
-int getModuleIndex(uint8_t moduleAddress) {
-  for (int i = 0; i < 4; i++) {
-    if (MODULE_ADDRESSES[i] == moduleAddress) return i;
-  }
-  return -1;
-}
+// ====== ATOMIC LOCK SYSTEM ======
+volatile bool globalButtonLock = false;           // GLOBAL LOCK FLAG
+volatile unsigned long globalLockStartTime = 0;   // Waktu lock dimulai
+const unsigned long GLOBAL_LOCK_TIMEOUT = 2000;   // 2 detik timeout lock
+volatile int pendingTeamToSend = 0;               // Tim yang menunggu dikirim
+volatile bool hasPendingRequest = false;          // Ada request pending
+volatile bool httpInProgress = false;             // HTTP sedang berjalan
 
-// ====== TIMINGS ======
-const unsigned long POLL_INTERVAL      = 8;
-const unsigned long DEBOUNCE_MS        = 40;
-const unsigned long JURY_DEBOUNCE_MS   = 60;
+// ====== TIMINGS OPTIMIZED ======
+const unsigned long DEBOUNCE_MS        = 25;
+const unsigned long JURY_DEBOUNCE_MS   = 50;
 const unsigned long LOCK_POLL_MS       = 1000;
-const unsigned long MODULE_SCAN_MS     = 3000;
+const unsigned long MODULE_SCAN_MS     = 5000;
 const unsigned long BUTTON_LED_DURATION = 500;
-const unsigned long WATCHDOG_TIMEOUT   = 30000; // 30 seconds
+const unsigned long WATCHDOG_TIMEOUT   = 30000;
+const unsigned long HTTP_SEND_TIMEOUT  = 800;     // Timeout send HTTP
 
 // ====== STATE ======
 char serverHost[64];
@@ -137,30 +136,84 @@ unsigned long lastWifiCheck = 0;
 unsigned long lastWatchdogFeed = 0;
 unsigned long lastSystemCheck = 0;
 
+// ========== HELPER FUNCTIONS ==========
+int getModuleIndex(uint8_t moduleAddress) {
+  for (int i = 0; i < 4; i++) {
+    if (MODULE_ADDRESSES[i] == moduleAddress) return i;
+  }
+  return -1;
+}
+
+// ========== ATOMIC LOCK MANAGEMENT ==========
+bool acquireGlobalLock(int team) {
+  unsigned long now = millis();
+  
+  // Cek jika lock sudah expired (timeout)
+  if (globalButtonLock && (now - globalLockStartTime > GLOBAL_LOCK_TIMEOUT)) {
+    Serial.printf("[LOCK] Global lock expired after %dms, releasing\n", GLOBAL_LOCK_TIMEOUT);
+    globalButtonLock = false;
+    hasPendingRequest = false;
+    pendingTeamToSend = 0;
+    httpInProgress = false;
+  }
+  
+  // Cek jika HTTP masih berjalan
+  if (httpInProgress) {
+    Serial.printf("[LOCK] Cannot acquire lock - HTTP in progress for Team %s\n", TEAM_NAMES[pendingTeamToSend-1]);
+    return false;
+  }
+  
+  // Coba acquire lock
+  if (!globalButtonLock) {
+    globalButtonLock = true;
+    globalLockStartTime = now;
+    pendingTeamToSend = team;
+    hasPendingRequest = true;
+    httpInProgress = true;
+    
+    Serial.printf("[LOCK] Global lock ACQUIRED for Team %s at %lu\n", TEAM_NAMES[team-1], now);
+    return true;
+  }
+  
+  Serial.printf("[LOCK] Global lock BUSY (Team %s waiting), current lock for Team %s\n", 
+                TEAM_NAMES[team-1], TEAM_NAMES[pendingTeamToSend-1]);
+  return false;
+}
+
+void releaseGlobalLock() {
+  globalButtonLock = false;
+  hasPendingRequest = false;
+  pendingTeamToSend = 0;
+  httpInProgress = false;
+  Serial.println("[LOCK] Global lock RELEASED");
+}
+
+void forceReleaseGlobalLock() {
+  if (globalButtonLock) {
+    Serial.println("[LOCK] Force releasing global lock");
+    releaseGlobalLock();
+  }
+}
+
 // ========== WIFI RESET FUNCTIONS ==========
 void handleWifiReset() {
   bool corrPressed = digitalRead(PIN_JURY_CORRECT) == LOW;
   bool wrongPressed = digitalRead(PIN_JURY_WRONG) == LOW;
   unsigned long now = millis();
 
-  // Jika kedua tombol juri ditekan
   if (corrPressed && wrongPressed) {
     if (!wifiResetActive) {
-      // Mulai timer reset WiFi
       wifiResetActive = true;
       wifiResetStartTime = now;
       Serial.println("[WIFI-RESET] Both jury buttons pressed - starting reset timer");
       
-      // Feedback visual: LED berkedip cepat
       digitalWrite(LED_MERAH, HIGH);
       digitalWrite(LED_HIJAU, HIGH);
     } else {
-      // Hitung progres reset
       unsigned long elapsed = now - wifiResetStartTime;
       float progress = (float)elapsed / WIFI_RESET_DURATION;
       
-      // Feedback visual progres
-      if (elapsed % 300 < 150) { // Berkedip lebih cepat saat progres
+      if (elapsed % 300 < 150) {
         digitalWrite(LED_MERAH, HIGH);
         digitalWrite(LED_HIJAU, HIGH);
       } else {
@@ -168,25 +221,16 @@ void handleWifiReset() {
         digitalWrite(LED_HIJAU, LOW);
       }
       
-      // Tampilkan progres di serial monitor
-      if (elapsed % 1000 == 0) {
-        Serial.printf("[WIFI-RESET] Reset progress: %.1f%%\n", progress * 100);
-      }
-      
-      // Jika sudah mencapai 5 detik, trigger reset
       if (elapsed >= WIFI_RESET_DURATION && !wifiResetTriggered) {
         wifiResetTriggered = true;
         triggerWifiReset();
       }
     }
   } else {
-    // Jika salah satu tombol dilepas, reset state
     if (wifiResetActive) {
       wifiResetActive = false;
       wifiResetTriggered = false;
       Serial.println("[WIFI-RESET] Reset cancelled - button released");
-      
-      // Kembalikan LED ke status normal
       updateStatusLED();
     }
   }
@@ -195,14 +239,11 @@ void handleWifiReset() {
 void triggerWifiReset() {
   Serial.println("\n[WIFI-RESET] ====== WIFI RESET TRIGGERED ======");
   Serial.println("[WIFI-RESET] Clearing saved WiFi credentials");
-  Serial.println("[WIFI-RESET] ESP32 will restart in config mode");
   
-  // Feedback visual: LED merah dan hijau menyala solid
   digitalWrite(LED_MERAH, HIGH);
   digitalWrite(LED_HIJAU, HIGH);
   delay(1000);
   
-  // Clear WiFi credentials
   WiFiManager wm;
   wm.resetSettings();
   
@@ -210,8 +251,6 @@ void triggerWifiReset() {
   Serial.println("[WIFI-RESET] Restarting ESP32...");
   
   delay(2000);
-  
-  // Restart ESP32
   ESP.restart();
 }
 
@@ -219,40 +258,33 @@ void triggerWifiReset() {
 void updateStatusLED() {
   unsigned long now = millis();
   
-  // Jika sedang proses reset WiFi, biarkan LED dikontrol oleh handleWifiReset
-  if (wifiResetActive) {
-    return;
-  }
+  if (wifiResetActive) return;
   
   switch (currentStatus) {
     case STATUS_BOOTING:
-      // LED Merah berkedip selama booting
       if (now - lastBlinkTime >= BLINK_INTERVAL) {
         lastBlinkTime = now;
         blinkState = !blinkState;
         digitalWrite(LED_MERAH, blinkState ? HIGH : LOW);
-        digitalWrite(LED_HIJAU, LOW); // Pastikan hijau mati
+        digitalWrite(LED_HIJAU, LOW);
       }
       break;
       
     case STATUS_WIFI_CONNECTING:
-      // LED Merah solid saat booting selesai tapi belum WiFi
       digitalWrite(LED_MERAH, HIGH);
       digitalWrite(LED_HIJAU, LOW);
       break;
       
     case STATUS_WIFI_CONNECTED:
-      // LED Hijau berkedip saat WiFi connected tapi belum web
       if (now - lastBlinkTime >= BLINK_INTERVAL) {
         lastBlinkTime = now;
         blinkState = !blinkState;
         digitalWrite(LED_HIJAU, blinkState ? HIGH : LOW);
-        digitalWrite(LED_MERAH, LOW); // Pastikan merah mati
+        digitalWrite(LED_MERAH, LOW);
       }
       break;
       
     case STATUS_WEB_CONNECTED:
-      // LED Hijau solid saat semua connected
       digitalWrite(LED_HIJAU, HIGH);
       digitalWrite(LED_MERAH, LOW);
       break;
@@ -279,16 +311,15 @@ void checkSystemStatus() {
   static unsigned long lastStatusCheck = 0;
   unsigned long now = millis();
   
-  if (now - lastStatusCheck >= 2000) { // Check setiap 2 detik
+  if (now - lastStatusCheck >= 10000) {
     lastStatusCheck = now;
     
     if (WiFi.status() == WL_CONNECTED) {
-      // Cek koneksi ke web server
       String url = "https://" + String(serverHost) + "/health";
       HTTPClient http;
       http.setReuse(false);
-      http.setConnectTimeout(3000);
-      http.setTimeout(3000);
+      http.setConnectTimeout(2000);
+      http.setTimeout(2000);
       
       bool success = http.begin(url);
       if (success) {
@@ -304,33 +335,18 @@ void checkSystemStatus() {
         setSystemStatus(STATUS_WIFI_CONNECTED);
       }
     } else {
-      if (currentStatus == STATUS_BOOTING) {
-        // Setelah booting, tapi WiFi belum connect
-        setSystemStatus(STATUS_WIFI_CONNECTING);
-      } else {
-        // Jika sebelumnya connected tapi sekarang disconnect
-        setSystemStatus(STATUS_WIFI_CONNECTING);
-      }
+      setSystemStatus(STATUS_WIFI_CONNECTING);
     }
   }
 }
 
 // ========== WATCHDOG & SYSTEM HEALTH ==========
-void setupWatchdog() {
-  // Enable hardware watchdog timer (HW WDT)
-  // ESP32 memiliki hardware watchdog built-in yang akan restart sistem jika timeout
-  Serial.println("[WDT] Hardware Watchdog enabled (timeout ~30s)");
-}
-
 void feedWatchdog() {
-  // Timer-based watchdog feeding
   unsigned long now = millis();
   
-  // Reset watchdog timer setiap 10 detik
   if (now - lastWatchdogFeed > 10000) {
     lastWatchdogFeed = now;
     
-    // Check if system is responsive
     if (now - lastSystemCheck > WATCHDOG_TIMEOUT) {
       Serial.println("[WDT] System hang detected - restarting ESP32");
       ESP.restart();
@@ -342,29 +358,11 @@ void updateSystemCheck() {
   lastSystemCheck = millis();
 }
 
-void optimizeMemory() {
-  static unsigned long lastMemCheck = 0;
-  unsigned long now = millis();
-  
-  if (now - lastMemCheck > 60000) { // Check every minute
-    lastMemCheck = now;
-    
-    uint32_t freeHeap = ESP.getFreeHeap();
-    uint32_t minHeap = ESP.getMinFreeHeap();
-    
-    Serial.printf("[MEMORY] Free: %d, Min: %d\n", freeHeap, minHeap);
-    
-    if (freeHeap < 20000) {
-      Serial.println("[MEMORY] Low heap - consider optimizing");
-    }
-  }
-}
-
 // ========== WIFI RECOVERY ==========
 void checkWiFiConnection() {
   unsigned long now = millis();
   
-  if (now - lastWifiCheck > 10000) { // Check every 10 seconds
+  if (now - lastWifiCheck > 10000) {
     lastWifiCheck = now;
     
     if (WiFi.status() != WL_CONNECTED) {
@@ -372,9 +370,9 @@ void checkWiFiConnection() {
       Serial.printf("[WiFi] Disconnected! Attempting reconnect #%d\n", wifiDisconnectCount);
       
       WiFi.disconnect();
-      delay(1000);
+      delay(500);
       WiFi.reconnect();
-      delay(2000);
+      delay(1000);
       
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("[WiFi] Reconnected successfully");
@@ -424,16 +422,14 @@ void scanPCFModules() {
 void recoverI2CBus() {
   Serial.println("[I2C] Bus recovery initiated...");
   
-  // Clear I2C bus
   Wire.end();
   pinMode(21, INPUT_PULLUP);
   pinMode(22, INPUT_PULLUP);
-  delay(100);
+  delay(50);
   
-  // Reinitialize I2C
   Wire.begin(21, 22);
   Wire.setClock(100000);
-  delay(100);
+  delay(50);
   
   Serial.println("[I2C] Bus recovery completed");
 }
@@ -442,7 +438,7 @@ void checkI2CHealth() {
   static unsigned long lastI2CCheck = 0;
   unsigned long now = millis();
   
-  if (now - lastI2CCheck > 30000) { // Every 30 seconds
+  if (now - lastI2CCheck > 30000) {
     lastI2CCheck = now;
     
     bool allModulesOK = true;
@@ -455,7 +451,7 @@ void checkI2CHealth() {
     
     if (!allModulesOK) {
       recoverI2CBus();
-      scanPCFModules(); // Rescan modules setelah recovery
+      scanPCFModules();
     }
   }
 }
@@ -493,22 +489,17 @@ void setTeamLED(uint8_t teamNumber, bool on) {
   uint8_t currentState = pcfOutCache[moduleIndex];
   
   if (on) {
-    currentState &= ~(1 << mapping.ledBit); // Clear bit (LED ON)
+    currentState &= ~(1 << mapping.ledBit);
   } else {
-    currentState |= (1 << mapping.ledBit);  // Set bit (LED OFF)
+    currentState |= (1 << mapping.ledBit);
   }
   
   pcfOutCache[moduleIndex] = currentState;
-  
-  Serial.printf("[LED] Team %s -> Module 0x%02X, LED Bit P%d %s (Value: 0x%02X)\n", 
-                mapping.teamName, mapping.moduleAddress, mapping.ledBit,
-                on ? "ON" : "OFF", currentState);
   
   writePCF(mapping.moduleAddress, currentState);
 }
 
 void clearAllLEDs() {
-  Serial.println("[CLEAR] Clearing all LEDs");
   for (int i = 0; i < 4; i++) {
     if (moduleDetected[i]) {
       pcfOutCache[i] = 0xFF;
@@ -534,7 +525,7 @@ void updateActiveTeamLED() {
   buttonLedStartTime[activeTeam-1] = millis();
 }
 
-// ====== BUTTON HANDLERS ======
+// ====== BUTTON HANDLERS WITH ATOMIC LOCK ======
 void pollPCFButtons() {
   unsigned long now = millis();
   
@@ -548,49 +539,56 @@ void pollPCFButtons() {
       continue;
     }
     
-    // Debug: log raw button states if changed
-    if (currentState != lastRead[moduleIndex]) {
-      Serial.printf("[BTN-RAW] Module 0x%02X: 0x%02X -> ", 
-                   MODULE_ADDRESSES[moduleIndex], currentState);
-      for (int i = 0; i < 3; i++) {
-        Serial.printf("B%d:%d ", i, (currentState & (1 << i)) == 0 ? 1 : 0);
-      }
-      Serial.println();
-    }
-    
     // Check each team mapping for this module
     for (int team = 0; team < 12; team++) {
       const ButtonLEDMapping& mapping = TEAM_MAPPINGS[team];
       
-      // Only process teams from current module
       if (mapping.moduleAddress != MODULE_ADDRESSES[moduleIndex]) continue;
       
       bool currentlyPressed = (currentState & (1 << mapping.buttonBit)) == 0;
       bool previouslyPressed = (lastRead[moduleIndex] & (1 << mapping.buttonBit)) == 0;
       
+      // DEBOUNCE 25ms
       if (currentlyPressed && !previouslyPressed && !lockActive &&
           now - lastDebounceTime[mapping.teamNumber] > DEBOUNCE_MS) {
+        
         lastDebounceTime[mapping.teamNumber] = now;
         
-        Serial.printf("[BUTTON] Team %s pressed! Module 0x%02X, Button Bit %d\n",
-                     mapping.teamName, mapping.moduleAddress, mapping.buttonBit);
+        Serial.printf("[BUTTON] Team %s pressed! Checking global lock...\n",
+                     mapping.teamName);
         
-        // Immediately activate LED for the pressed button
+        // ===== ATOMIC LOCK CHECK =====
+        // 1. Coba acquire global lock
+        if (!acquireGlobalLock(mapping.teamNumber)) {
+          // Lock tidak tersedia, tombol diabaikan
+          Serial.printf("[BUTTON] Team %s IGNORED - global lock busy\n", mapping.teamName);
+          
+          // Blink LED cepat untuk feedback
+          setTeamLED(mapping.teamNumber, true);
+          delay(50);
+          setTeamLED(mapping.teamNumber, false);
+          
+          continue; // Lanjut ke tombol berikutnya
+        }
+        
+        // 2. Set lock lokal
+        lockActive = true;
+        activeTeam = mapping.teamNumber;
+        
+        // 3. Immediate visual feedback
         setTeamLED(mapping.teamNumber, true);
         buttonLedActive[mapping.teamNumber-1] = true;
         buttonLedStartTime[mapping.teamNumber-1] = now;
         
-        // Set lock state
-        lockActive = true;
-        activeTeam = mapping.teamNumber;
-        
-        // Send to server
-        sendUpdateToServer(mapping.teamNumber, 0, true);
-        
-        // Update LED state (this will clear others and set active)
+        // 4. Update LED lainnya
         updateActiveTeamLED();
         
-        break; // Only process one button press at a time
+        // 5. Kirim ke server dalam task terpisah
+        sendUpdateToServerAtomic(mapping.teamNumber);
+        
+        Serial.printf("[BUTTON] Team %s LOCKED and queued for server\n", mapping.teamName);
+        
+        break; // Hanya proses satu tombol per cycle
       }
     }
     
@@ -621,9 +619,9 @@ void handleJuryButtons() {
     if (lockActive && activeTeam && activeTeam <= 12) {
       Serial.printf("[JURY] Correct for Team %s\n", TEAM_NAMES[activeTeam-1]);
       
-      // Visual feedback - quick blink
+      // Fast visual feedback
       setTeamLED(activeTeam, false);
-      delay(80);
+      delay(30);
       setTeamLED(activeTeam, true);
       buttonLedStartTime[activeTeam-1] = now;
       
@@ -636,12 +634,12 @@ void handleJuryButtons() {
     if (lockActive && activeTeam && activeTeam <= 12) {
       Serial.printf("[JURY] Wrong for Team %s\n", TEAM_NAMES[activeTeam-1]);
       
-      // Visual feedback - double blink
+      // Faster double blink
       for (int i = 0; i < 2; i++) {
         setTeamLED(activeTeam, false);
-        delay(80);
+        delay(30);
         setTeamLED(activeTeam, true);
-        if (i == 0) delay(40);
+        if (i == 0) delay(20);
       }
       buttonLedStartTime[activeTeam-1] = now;
       
@@ -653,47 +651,67 @@ void handleJuryButtons() {
   lastJuryWrongState   = wrong;
 }
 
-// ====== ROBUST HTTP OPERATIONS ======
-String httpGetString(const String &url) {
-  if (WiFi.status() != WL_CONNECTED) return "";
-  
-  HTTPClient http;
-  http.setReuse(false); // Prevent connection leaks
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
-  
-  bool success = http.begin(url);
-  if (!success) {
-    Serial.println("[HTTP] Connection begin failed");
-    return "";
-  }
-  
-  int code = http.GET();
-  String payload = (code == 200) ? http.getString() : "";
-  http.end();
-  
-  return payload;
-}
-
-void sendUpdateToServer(int team, int add, bool isFirst) {
-  if (WiFi.status() != WL_CONNECTED) return;
-  
-  String url = "https://" + String(serverHost) + "/update?team=" + String(team) + "&add=" + add;
-  if (isFirst) url += "&first=1";
-  
-  HTTPClient http;
-  http.setReuse(false);
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
-  
-  bool success = http.begin(url);
-  if (!success) {
-    Serial.println("[HTTP] Update connection failed");
+// ====== HTTP SEND WITH ATOMIC LOCK ======
+void sendUpdateToServerAtomic(int team) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[HTTP] WiFi not connected for Team %s, releasing lock\n", TEAM_NAMES[team-1]);
+    releaseGlobalLock();
     return;
   }
   
-  int code = http.GET();
-  Serial.printf("[UPDATE] Team %s first=%d code=%d\n", TEAM_NAMES[team-1], isFirst, code);
+  String url = "https://" + String(serverHost) + "/update?team=" + String(team) + "&add=0&first=1";
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(HTTP_SEND_TIMEOUT);
+  http.setTimeout(HTTP_SEND_TIMEOUT);
+  
+  unsigned long startTime = millis();
+  
+  bool success = http.begin(url);
+  if (success) {
+    int code = http.GET();
+    unsigned long elapsed = millis() - startTime;
+    
+    Serial.printf("[HTTP] Team %s -> Code: %d, Time: %dms\n", 
+                  TEAM_NAMES[team-1], code, elapsed);
+    
+    // Periksa response
+    if (code == 200) {
+      // Success - server menerima request kita
+      Serial.printf("[HTTP] Team %s successfully locked by server\n", TEAM_NAMES[team-1]);
+      
+      // Tunggu sedikit untuk memastikan server memproses
+      delay(50);
+      httpInProgress = false; // Tandai HTTP selesai
+      
+    } else if (code == 403) {
+      // Server mengatakan "Tombol terkunci" - mungkin tim lain lebih cepat
+      Serial.printf("[HTTP] Team %s rejected by server - already locked\n", TEAM_NAMES[team-1]);
+      
+      // Reset local lock karena kita bukan yang pertama
+      lockActive = false;
+      activeTeam = 0;
+      clearAllLEDs();
+      
+      delay(50);
+      httpInProgress = false;
+      releaseGlobalLock();
+      
+    } else {
+      // Error lainnya
+      Serial.printf("[HTTP] Error %d for Team %s\n", code, TEAM_NAMES[team-1]);
+      delay(50);
+      httpInProgress = false;
+      releaseGlobalLock();
+    }
+  } else {
+    Serial.printf("[HTTP] Connection failed for Team %s\n", TEAM_NAMES[team-1]);
+    delay(50);
+    httpInProgress = false;
+    releaseGlobalLock();
+  }
+  
   http.end();
 }
 
@@ -704,8 +722,8 @@ void sendJuryUpdateToServer(int team, int add, const char *action) {
   
   HTTPClient http;
   http.setReuse(false);
-  http.setConnectTimeout(5000);
-  http.setTimeout(5000);
+  http.setConnectTimeout(1500);
+  http.setTimeout(1500);
   
   bool success = http.begin(url);
   if (!success) {
@@ -718,9 +736,57 @@ void sendJuryUpdateToServer(int team, int add, const char *action) {
   http.end();
 }
 
+// ====== HANDLE PENDING REQUESTS ======
+void handlePendingRequests() {
+  static unsigned long lastProcessTime = 0;
+  unsigned long now = millis();
+  
+  // Proses pending request setiap 100ms
+  if (now - lastProcessTime < 100) return;
+  lastProcessTime = now;
+  
+  // Auto-release lock jika timeout
+  if (globalButtonLock && (now - globalLockStartTime > GLOBAL_LOCK_TIMEOUT)) {
+    Serial.println("[LOCK] Auto-releasing lock due to timeout");
+    
+    // Reset semua state
+    releaseGlobalLock();
+    
+    if (lockActive) {
+      lockActive = false;
+      activeTeam = 0;
+      clearAllLEDs();
+    }
+  }
+  
+  // Jika HTTP sudah selesai tapi lock masih dipegang, release
+  if (globalButtonLock && !httpInProgress && (now - globalLockStartTime > 500)) {
+    Serial.println("[LOCK] Releasing lock after HTTP completed");
+    releaseGlobalLock();
+  }
+}
+
+String httpGetStringFast(const String &url) {
+  if (WiFi.status() != WL_CONNECTED) return "";
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(2000);
+  http.setTimeout(2000);
+  
+  bool success = http.begin(url);
+  if (!success) return "";
+  
+  int code = http.GET();
+  String payload = (code == 200) ? http.getString() : "";
+  http.end();
+  
+  return payload;
+}
+
 void pollLockState() {
   String url = "https://" + String(serverHost) + "/lockstate";
-  String payload = httpGetString(url);
+  String payload = httpGetStringFast(url);
   if (payload.isEmpty()) return;
   
   StaticJsonDocument<200> doc;
@@ -734,11 +800,29 @@ void pollLockState() {
     activeTeam = newActive;
     
     if (lockActive && activeTeam > 0) {
-      Serial.printf("[LOCK] Team %s locked\n", TEAM_NAMES[activeTeam-1]);
+      Serial.printf("[SERVER-LOCK] Team %s locked by server\n", TEAM_NAMES[activeTeam-1]);
+      
+      // Jika server mengunci tim yang berbeda dengan pending kita,
+      // release global lock kita
+      if (hasPendingRequest && pendingTeamToSend != activeTeam) {
+        Serial.printf("[SERVER-LOCK] Releasing our lock (Team %s) because server locked Team %s\n",
+                     TEAM_NAMES[pendingTeamToSend-1], TEAM_NAMES[activeTeam-1]);
+        forceReleaseGlobalLock();
+        
+        // Reset local state
+        lockActive = false;
+        clearAllLEDs();
+      }
+      
       updateActiveTeamLED();
     } else {
-      Serial.println("[LOCK] System unlocked");
+      Serial.println("[SERVER-LOCK] System unlocked by server");
       clearAllLEDs();
+      
+      // Juga release global lock kita
+      if (hasPendingRequest) {
+        forceReleaseGlobalLock();
+      }
     }
   }
 }
@@ -749,14 +833,16 @@ void safeHealthCheck() {
   String url = "https://" + String(serverHost) + "/health";
   HTTPClient http;
   http.setReuse(false);
-  http.setConnectTimeout(3000);
-  http.setTimeout(3000);
+  http.setConnectTimeout(2000);
+  http.setTimeout(2000);
   
   bool success = http.begin(url);
   if (success) {
     int code = http.GET();
     http.end();
-    Serial.printf("[HEALTH] Server response: %d\n", code);
+    if (code != 200) {
+      Serial.printf("[HEALTH] Server response: %d\n", code);
+    }
   }
 }
 
@@ -792,50 +878,26 @@ void setup() {
   delay(1000);
   
   Serial.println("\n========================================");
-  Serial.println("QUIZ SCORING SYSTEM - STABILITY FIXED");
-  Serial.println("With Watchdog, WiFi & I2C Recovery");
+  Serial.println("QUIZ SCORING SYSTEM - ATOMIC FIX VERSION");
+  Serial.println("FIXED: Race condition pada tombol");
   Serial.println("========================================");
   
   // Initialize Status LED Pins
   pinMode(LED_MERAH, OUTPUT);
   pinMode(LED_HIJAU, OUTPUT);
   
-  // Pastikan kedua LED mati di awal
   digitalWrite(LED_MERAH, LOW);
   digitalWrite(LED_HIJAU, LOW);
   
-  Serial.println("STATUS LED CONFIGURATION:");
-  Serial.println("  LED Merah -> GPIO 33");
-  Serial.println("  LED Hijau -> GPIO 32");
-  Serial.println("  Common Cathode dengan resistor 220ohm ke GND");
-  Serial.println("");
-  Serial.println("WIFI RESET FEATURE:");
-  Serial.println("  Press and hold BOTH jury buttons for 5 seconds");
-  Serial.println("  to reset WiFi configuration");
+  Serial.println("ATOMIC LOCK SYSTEM:");
+  Serial.println("  - Global lock untuk mencegah race condition");
+  Serial.println("  - Hanya tim pertama yang akan terkunci");
+  Serial.println("  - Auto-release lock setelah 2 detik");
   Serial.println("");
   
-  Serial.println("CORRECTED LED MAPPING:");
-  Serial.println("LED_1 = P3 (bit 3)");
-  Serial.println("LED_2 = P4 (bit 4)");  
-  Serial.println("LED_3 = P5 (bit 5)");
-  Serial.println("");
-  Serial.println("TEAM MAPPING CONFIGURATION:");
-  
-  // Print semua mapping
-  for (int i = 0; i < 12; i++) {
-    const ButtonLEDMapping& mapping = TEAM_MAPPINGS[i];
-    Serial.printf("  Team %s (%d) -> Module 0x%02X, Button Bit %d, LED Bit P%d\n",
-                  mapping.teamName, mapping.teamNumber,
-                  mapping.moduleAddress, mapping.buttonBit, mapping.ledBit);
-  }
-
   // Initialize I2C
   Wire.begin(21, 22);
   Wire.setClock(100000);
-  
-  // Initialize watchdog system
-  setupWatchdog();
-  updateSystemCheck();
   
   // Initial module scan
   scanPCFModules();
@@ -853,63 +915,72 @@ void setup() {
   // Setup WiFi
   setupWiFiManager();
   
-  Serial.println("\n[INIT] System ready with stability fixes");
+  Serial.println("\n[INIT] System ready - Atomic lock enabled");
   Serial.printf("[INIT] Free Heap: %d bytes\n", ESP.getFreeHeap());
   Serial.println("========================================\n");
 }
 
-// ====== MAIN LOOP ======
+// ====== OPTIMIZED MAIN LOOP ======
 void loop() {
   unsigned long now = millis();
   
-  // Update system check timestamp
-  updateSystemCheck();
+  // 1. HIGHEST PRIORITY: Tombol dengan atomic lock
+  pollPCFButtons();
   
-  // Feed the watchdog
-  feedWatchdog();
+  // 2. Handle pending requests dan lock management
+  handlePendingRequests();
   
-  // Handle WiFi reset feature
+  // 3. Tombol juri
+  handleJuryButtons();
+  
+  // 4. Update LED state
+  updateButtonLEDs();
+  
+  // 5. WiFi reset feature
   handleWifiReset();
   
-  // Update status LED (jika tidak sedang reset WiFi)
-  if (!wifiResetActive) {
-    updateStatusLED();
+  // 6. Status LED update
+  updateStatusLED();
+  
+  // 7. Background tasks (100ms interval)
+  static unsigned long lastBackgroundCheck = 0;
+  if (now - lastBackgroundCheck >= 100) {
+    lastBackgroundCheck = now;
+    
+    updateSystemCheck();
+    feedWatchdog();
+    checkWiFiConnection();
   }
   
-  // Check and update system status
-  checkSystemStatus();
-  
-  // System health monitoring
-  checkWiFiConnection();
-  checkI2CHealth();
-  optimizeMemory();
-  
-  // Core functionality
-  handleJuryButtons();
-  pollPCFButtons();
-  updateButtonLEDs();
-
-  // Lock state polling
+  // 8. HTTP polling untuk lock state (1 detik)
   static unsigned long lastLockPoll = 0;
-  if (now - lastLockPoll >= LOCK_POLL_MS) { 
-    lastLockPoll = now; 
-    pollLockState(); 
+  if (now - lastLockPoll >= LOCK_POLL_MS) {
+    lastLockPoll = now;
+    pollLockState();
   }
-
-  // Module scanning
+  
+  // 9. System status check (10 detik)
+  static unsigned long lastStatusCheck = 0;
+  if (now - lastStatusCheck >= 10000) {
+    lastStatusCheck = now;
+    checkSystemStatus();
+  }
+  
+  // 10. Health check (30 detik)
+  static unsigned long lastHealthCheck = 0;
+  if (now - lastHealthCheck >= 30000) {
+    lastHealthCheck = now;
+    safeHealthCheck();
+  }
+  
+  // 11. Module scan dan I2C health (5 detik)
   static unsigned long lastModuleScan = 0;
   if (now - lastModuleScan >= MODULE_SCAN_MS) {
     lastModuleScan = now;
     scanPCFModules();
+    checkI2CHealth();
   }
-
-  // Health check to server
-  static unsigned long lastKeepAlivePing = 0;
-  if (now - lastKeepAlivePing >= 30000) { // 30 seconds
-    lastKeepAlivePing = now;
-    safeHealthCheck();
-  }
-
-  // Small delay to prevent tight loop and allow background tasks
-  delay(10);
+  
+  // 12. Minimal delay untuk menjaga responsivitas
+  delay(1);
 }
