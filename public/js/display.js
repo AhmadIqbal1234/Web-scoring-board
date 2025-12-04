@@ -563,8 +563,11 @@ socket.on("disconnect", () => {
 socket.on("buzz", ({ team }) => {
   const now = Date.now();
   
+  console.log(`[BUZZ] Event received for Team ${getTeamLetter(team)}`);
+  
   // Cooldown check
   if (now - lastButtonProcessTime < BUTTON_COOLDOWN) {
+    console.log(`[BUZZ] Cooldown active, ignoring`);
     return;
   }
   
@@ -572,13 +575,14 @@ socket.on("buzz", ({ team }) => {
   
   // Atomic lock check
   if (!checkAtomicLock(team)) {
+    console.log(`[BUZZ] Atomic lock check failed`);
     return;
   }
   
   // Set atomic lock
   setAtomicLock(team);
   
-  console.log(`[BUZZ] Tim ${getTeamLetter(team)} menerima buzz event`);
+  console.log(`[BUZZ] Processing buzz for Team ${getTeamLetter(team)}`);
   
   if (teamToggleState[team - 1]) {
     // Immediate visual feedback
@@ -595,6 +599,8 @@ socket.on("buzz", ({ team }) => {
         socket.emit("preTeamAudioFinished", { team: team });
       }, 300);
     }
+  } else {
+    console.log(`[BUZZ] Team ${getTeamLetter(team)} is disabled`);
   }
 });
 
@@ -632,6 +638,8 @@ socket.on("playPreTeamAudio", (data) => {
 socket.on("update", payload => {
   const { team, score } = payload;
   
+  console.log(`[UPDATE] Team ${getTeamLetter(team)} score: ${score}`);
+  
   if (team && score !== undefined && team >= 1 && team <= TEAM_COUNT) {
     const el = document.getElementById("score-" + team);
     if (el) {
@@ -644,6 +652,8 @@ socket.on("update", payload => {
 
 // Reset semua skor
 socket.on("reset", arr => {
+  console.log('[RESET] All scores reset');
+  
   if (Array.isArray(arr)) {
     arr.forEach((s, idx) => {
       const el = document.getElementById("score-" + (idx + 1));
@@ -659,6 +669,8 @@ socket.on("lockstate", state => {
   atomicLockState.activeTeam = state.activeTeam || 0;
   atomicLockState.lockTime = state.lockTime || 0;
   
+  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)}` : 'Unlocked'}`);
+  
   if (!state.locked) {
     resetDisplay();
     clearAtomicLock();
@@ -666,13 +678,13 @@ socket.on("lockstate", state => {
     showActiveTeam(state.activeTeam);
     setAtomicLock(state.activeTeam);
   }
-  
-  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)}` : 'Unlocked'}`);
 });
 
 // Event untuk update status toggle tim
 socket.on("teamToggleUpdate", data => {
   const { team, enabled } = data;
+  
+  console.log(`[TOGGLE] Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`);
   
   if (team >= 1 && team <= TEAM_COUNT) {
     teamToggleState[team - 1] = enabled;
@@ -682,12 +694,14 @@ socket.on("teamToggleUpdate", data => {
 
 // Event untuk enable semua tim
 socket.on("allTeamsEnabled", () => {
+  console.log('[TOGGLE] All teams enabled');
   teamToggleState = Array(TEAM_COUNT).fill(true);
   updateTeamDisplay();
 });
 
 // Event untuk disable semua tim
 socket.on("allTeamsDisabled", () => {
+  console.log('[TOGGLE] All teams disabled');
   teamToggleState = Array(TEAM_COUNT).fill(false);
   updateTeamDisplay();
 });
@@ -723,12 +737,14 @@ socket.on("playTeamAudio", (data) => {
 // Timer Audio Events
 socket.on("playTimerAudio", (data) => {
   const { seconds, audioFile } = data;
+  console.log(`[TIMER AUDIO] Playing: ${audioFile} (${seconds}s)`);
   timerAudio.putarAudio(audioFile);
 });
 
 // Jury Audio Events
 socket.on("playJuryAudio", (data) => {
   const { isCorrect, audioFile } = data;
+  console.log(`[JURY AUDIO] Playing: ${audioFile} (${isCorrect ? 'correct' : 'wrong'})`);
   juryAudio.putarAudio(audioFile);
   
   const aiMessageEl = document.getElementById("aiMessage");
@@ -779,6 +795,7 @@ socket.on("aiMessage", (data) => {
 
 // ===== TIMER EVENTS =====
 socket.on("timerStart", (data) => {
+  console.log(`[TIMER] Started: ${data.duration}s`);
   if (data.duration) {
     updateTimerDisplayOptimized(data.duration);
   }
@@ -797,6 +814,8 @@ socket.on("timerUpdate", (data) => {
 });
 
 socket.on("timerReset", () => {
+  console.log('[TIMER] Reset');
+  
   if (timerUpdateTimeout) {
     clearTimeout(timerUpdateTimeout);
   }
@@ -841,16 +860,16 @@ socket.on("timerStatusResponse", (data) => {
 
 // Event untuk auto penalty
 socket.on("autoPenaltyToggle", (data) => {
-  console.log(`[AUTO-PENALTY] ${data.enabled ? 'Diaktifkan' : 'Dinonaktifkan'}`);
+  console.log(`[AUTO-PENALTY] ${data.enabled ? 'Enabled' : 'Disabled'}`);
 });
 
 socket.on("autoPenaltyStatus", (data) => {
-  console.log(`[AUTO-PENALTY] Status: ${data.enabled ? 'AKTIF' : 'NONAKTIF'}`);
+  console.log(`[AUTO-PENALTY] Status: ${data.enabled ? 'ACTIVE' : 'INACTIVE'}`);
 });
 
-// ===== ESP32 STATUS EVENTS (PERBAIKAN) =====
+// ===== ESP32 STATUS EVENTS =====
 socket.on("esp32Status", (status) => {
-  console.log(`[ESP32] Status: ${status.connected ? 'TERHUBUNG' : 'TERPUTUS'}`);
+  console.log(`[ESP32] Status: ${status.connected ? 'CONNECTED' : 'DISCONNECTED'}`);
   
   // Update indikator di halaman utama jika ada
   const esp32Indicator = document.querySelector('.esp32-indicator');
@@ -873,7 +892,7 @@ function checkTimerStatus() {
 // ===== INITIALIZE =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
-  console.log('[DISPLAY] Initialized - Atomic Lock System Ready');
+  console.log('[DISPLAY] Initialized - Fixed Version');
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {

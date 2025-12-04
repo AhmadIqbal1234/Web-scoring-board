@@ -18,33 +18,79 @@ let esp32Status = {
 let teamStatus = Array(TEAM_COUNT).fill(true);
 let autoPenaltyEnabled = true;
 
+// ===== DEBUG PANEL =====
+const debugPanel = document.createElement('div');
+debugPanel.id = 'debugPanel';
+debugPanel.style.cssText = `
+  position: fixed;
+  bottom: 10px;
+  left: 10px;
+  background: rgba(0,0,0,0.8);
+  color: white;
+  padding: 10px;
+  border-radius: 5px;
+  font-family: monospace;
+  font-size: 12px;
+  max-width: 300px;
+  max-height: 200px;
+  overflow: auto;
+  z-index: 10000;
+  display: none;
+`;
+document.body.appendChild(debugPanel);
+
 // ===== SISTEM LOG ADMIN =====
 const adminLogger = {
   info: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] ${message}`, data || '');
+    const logMsg = `[ADMIN:${timestamp}] ${message}`;
+    console.log(logMsg, data || '');
+    debugLog(logMsg);
   },
   
   warn: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] ${message}`, data || '');
+    const logMsg = `[ADMIN:${timestamp}] ${message}`;
+    console.warn(logMsg, data || '');
+    debugLog(`⚠️ ${logMsg}`);
   },
   
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] ${message}`, data || '');
+    const logMsg = `[ADMIN:${timestamp}] ${message}`;
+    console.error(logMsg, data || '');
+    debugLog(`❌ ${logMsg}`);
   },
   
   event: (eventName, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] EVENT: ${eventName}`, data || '');
+    const logMsg = `[ADMIN:${timestamp}] EVENT: ${eventName}`;
+    console.log(logMsg, data || '');
+    debugLog(`📡 ${logMsg}`);
   },
   
   esp32: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] ESP32: ${message}`, data || '');
+    const logMsg = `[ADMIN:${timestamp}] ESP32: ${message}`;
+    console.log(logMsg, data || '');
+    debugLog(`🤖 ${logMsg}`);
   }
 };
+
+// Fungsi untuk log ke debug panel
+function debugLog(message) {
+  const debugPanel = document.getElementById('debugPanel');
+  if (debugPanel) {
+    const time = new Date().toLocaleTimeString('id-ID', { hour12: false });
+    debugPanel.innerHTML += `[${time}] ${message}<br>`;
+    debugPanel.scrollTop = debugPanel.scrollHeight;
+    
+    // Tampilkan debug panel jika ada error
+    if (message.includes('ERROR') || message.includes('FAILED')) {
+      debugPanel.style.display = 'block';
+    }
+  }
+}
 
 // ===== STATUS KONEKSI =====
 const statusDot = document.querySelector('.status-dot');
@@ -57,6 +103,10 @@ socket.on("connect", () => {
         connectionStatus.style.background = '#2e7d32';
         connectionStatus.textContent = 'TERHUBUNG KE SERVER - ONLINE';
     }
+    
+    // Request initial data
+    socket.emit("getESP32Status");
+    socket.emit("getTimerStatus");
 });
 
 socket.on("disconnect", () => {
@@ -177,7 +227,7 @@ function createTeamControls() {
     teamsContainer.appendChild(secondRow);
 }
 
-// ===== UPDATE STATUS ESP32 (PERBAIKAN UTAMA) =====
+// ===== UPDATE STATUS ESP32 =====
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -248,7 +298,7 @@ function updateESP32Status(status) {
     esp32SocketId.textContent = esp32Status.socketId || "Koneksi HTTP";
   }
   
-  // ===== PERBAIKAN: UPDATE TIMESTAMP REAL-TIME =====
+  // Update timestamp
   updateESP32Timestamp();
   
   // Hanya tampilkan notifikasi jika status berubah
@@ -290,7 +340,7 @@ function updateESP32Timestamp() {
   }
 }
 
-// ===== INISIALISASI KONTROL ESP32 (PERBAIKAN UTAMA) =====
+// ===== INISIALISASI KONTROL ESP32 =====
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -303,14 +353,13 @@ function initializeESP32Controls() {
     testBtn.addEventListener("click", testESP32Connection);
   }
   
-  // ===== PERBAIKAN: POLLING REAL-TIME =====
+  // Polling real-time
   startESP32RealTimePolling();
   
   // Refresh saat halaman terlihat
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) {
       refreshESP32Status();
-      // Request status ESP32 dari server
       socket.emit("getESP32Status");
     }
   });
@@ -318,7 +367,7 @@ function initializeESP32Controls() {
 
 // ===== FUNGSI BARU: POLLING STATUS ESP32 REAL-TIME =====
 function startESP32RealTimePolling() {
-  // Polling setiap 3 detik untuk status terbaru
+  // Polling setiap 5 detik untuk status terbaru
   setInterval(() => {
     // Request status dari server via socket
     socket.emit("getESP32Status");
@@ -328,27 +377,11 @@ function startESP32RealTimePolling() {
       .then(r => r.json())
       .then(data => {
         updateESP32Status(data);
-        
-        // Periksa jika ESP32 offline tapi baru saja ada aktivitas
-        const now = new Date();
-        const lastActivity = data.aktivitasTerakhir ? new Date(data.aktivitasTerakhir) : null;
-        
-        if (lastActivity && (now - lastActivity < 30000)) { // 30 detik terakhir
-          // ESP32 aktif dalam 30 detik terakhir
-          if (!data.terhubung) {
-            // Perbaiki status jika salah
-            updateESP32Status({
-              ...data,
-              connected: true,
-              connectionType: "recent_activity_detected"
-            });
-          }
-        }
       })
       .catch(err => {
         console.error('ESP32 polling error:', err);
       });
-  }, 3000); // Setiap 3 detik
+  }, 5000);
   
   // Update timestamp setiap detik
   setInterval(updateESP32Timestamp, 1000);
@@ -405,7 +438,6 @@ function testESP32Connection() {
             <small>${data.pesan}</small><br>
             <small>Tipe: ${data.tipeKoneksi}</small>
             ${data.waktuRespon ? `<br><small>Respon: ${data.waktuRespon}</small>` : ''}
-            ${data.detail ? `<br><small>${JSON.stringify(data.detail)}</small>` : ''}
           `;
           showNotification("✅ ESP32 ONLINE - Terhubung dengan baik!", "success");
         } else {
@@ -413,7 +445,7 @@ function testESP32Connection() {
             <strong>❌ TEST GAGAL</strong><br>
             <small>${data.pesan}</small><br>
             <small>Tipe: ${data.tipeKoneksi}</small>
-            ${data.saran ? `<br><small>${data.saran}</small>` : ''}
+            ${data.saran ? `<br><small>Saran: ${data.saran}</small>` : ''}
           `;
           showNotification("❌ ESP32 OFFLINE - Tidak terdeteksi!", "error");
         }
@@ -989,7 +1021,7 @@ function updateTimerStatus(state, seconds) {
     adminLogger.info('Status timer diperbarui', { state: state, detik: seconds });
 }
 
-// ===== SOCKET EVENTS UNTUK ESP32 (PERBAIKAN UTAMA) =====
+// ===== SOCKET EVENTS UNTUK ESP32 =====
 socket.on("esp32Status", (status) => {
     adminLogger.event('esp32Status', status);
     updateESP32Status(status);
@@ -1145,6 +1177,15 @@ socket.on("reset", (scores) => {
     }
 });
 
+socket.on("timerStatusResponse", (data) => {
+    adminLogger.event('timerStatusResponse', data);
+    if (data.berjalan) {
+        updateTimerStatus('BERJALAN', data.waktuTersisa);
+    } else {
+        updateTimerStatus('TIDAK AKTIF', 0);
+    }
+});
+
 // ===== FUNGSI RESET TIMER MANUAL =====
 function manualTimerReset() {
     adminLogger.info('Reset timer manual diminta');
@@ -1255,8 +1296,17 @@ function initializeAdmin() {
 document.addEventListener('DOMContentLoaded', function() {
     adminLogger.info('Panel admin diinisialisasi...');
     adminLogger.esp32('Sistem monitoring ESP32 REAL-TIME diaktifkan');
-    adminLogger.esp32('Polling setiap 3 detik untuk status ESP32');
     initializeAdmin();
+    
+    // Toggle debug panel dengan Ctrl+Shift+D
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+            const debugPanel = document.getElementById('debugPanel');
+            if (debugPanel) {
+                debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
+            }
+        }
+    });
     
     try {
         if (typeof Swal === 'undefined') {
