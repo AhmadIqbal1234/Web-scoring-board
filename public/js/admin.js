@@ -15,7 +15,8 @@ let esp32Status = {
   ip: null,
   connectionType: null,
   activeTeams: 12,
-  modulesDetected: 4
+  modulesDetected: 4,
+  heartbeatCount: 0  // PERBAIKAN: Tambah field heartbeat
 };
 
 // ===== LOGGER =====
@@ -41,7 +42,7 @@ function getTeamLetter(index) {
   return String.fromCharCode(64 + index);
 }
 
-// ===== UPDATE ESP32 STATUS =====
+// ===== UPDATE ESP32 STATUS (PERBAIKAN) =====
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -58,7 +59,10 @@ function updateESP32Status(status) {
       esp32Badge.className = "controller-badge connected";
       esp32Badge.style.animation = "pulse 2s infinite";
       
-      let connectionText = `ONLINE - ${esp32Status.modulesDetected} module(s) - ${esp32Status.activeTeams} team(s)`;
+      let connectionText = `ONLINE`;
+      if (esp32Status.modulesDetected) connectionText += ` - ${esp32Status.modulesDetected} modul`;
+      if (esp32Status.activeTeams) connectionText += ` - ${esp32Status.activeTeams} tim`;
+      if (esp32Status.heartbeatCount) connectionText += ` - Heartbeat: ${esp32Status.heartbeatCount}`;
       if (esp32Status.ip) connectionText += ` (${esp32Status.ip})`;
       
       esp32Connection.textContent = connectionText;
@@ -67,7 +71,7 @@ function updateESP32Status(status) {
       esp32Badge.textContent = "TERPUTUS";
       esp32Badge.className = "controller-badge disconnected";
       esp32Badge.style.animation = "none";
-      esp32Connection.textContent = "OFFLINE";
+      esp32Connection.textContent = "OFFLINE - Tidak ada aktivitas dalam 5 menit";
       esp32Connection.style.color = "#f44336";
     }
   }
@@ -85,6 +89,9 @@ function updateESP32Status(status) {
     } else if (timeDiff < 60) {
       timeText += ` (${timeDiff} detik lalu)`;
       esp32LastActivity.style.color = "#ff9800";
+    } else if (timeDiff < 300) {
+      timeText += ` (${Math.floor(timeDiff / 60)} menit lalu)`;
+      esp32LastActivity.style.color = "#ff9800";
     } else {
       timeText += ` (${Math.floor(timeDiff / 60)} menit lalu)`;
       esp32LastActivity.style.color = "#f44336";
@@ -99,16 +106,23 @@ function updateESP32Status(status) {
   
   updateESP32Timestamp();
   
+  // PERBAIKAN: Log status perubahan
   if (sebelumnyaOnline !== esp32Status.connected) {
     const pesan = esp32Status.connected ? 
       `ESP32 terhubung! (${esp32Status.modulesDetected} modul, ${esp32Status.activeTeams} tim)` : 
-      "ESP32 terputus!";
+      "ESP32 terputus! (timeout 5 menit)";
     const tipe = esp32Status.connected ? "success" : "error";
     showNotification(pesan, tipe);
+    
+    adminLogger.esp32(`Status changed: ${esp32Status.connected ? 'CONNECTED' : 'DISCONNECTED'}`, {
+      lastActivity: esp32Status.lastActivity,
+      connectionType: esp32Status.connectionType,
+      heartbeatCount: esp32Status.heartbeatCount
+    });
   }
 }
 
-// ===== UPDATE TIMESTAMP =====
+// ===== UPDATE TIMESTAMP (PERBAIKAN) =====
 function updateESP32Timestamp() {
   const now = new Date();
   const lastActivity = esp32Status.lastActivity ? new Date(esp32Status.lastActivity) : null;
@@ -124,9 +138,19 @@ function updateESP32Timestamp() {
       } else if (timeDiff < 60) {
         timestampElement.textContent = `${timeDiff} detik lalu`;
         timestampElement.style.color = "#ff9800";
+      } else if (timeDiff < 300) {
+        timestampElement.textContent = `${Math.floor(timeDiff / 60)} menit lalu`;
+        timestampElement.style.color = "#ff9800";
       } else {
         timestampElement.textContent = `${Math.floor(timeDiff / 60)} menit lalu`;
         timestampElement.style.color = "#f44336";
+      }
+      
+      // PERBAIKAN: Auto-refresh jika mendekati timeout
+      if (timeDiff > 240 && timeDiff < 300) { // 4-5 menit
+        if (!document.hidden) {
+          refreshESP32Status();
+        }
       }
     }
   }
@@ -236,7 +260,7 @@ function createTeamControls() {
   teamsContainer.appendChild(secondRow);
 }
 
-// ===== ESP32 CONTROLS =====
+// ===== ESP32 CONTROLS (PERBAIKAN) =====
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -256,11 +280,19 @@ function initializeESP32Controls() {
   
   startESP32RealTimePolling();
   
+  // PERBAIKAN: Auto-refresh saat tab aktif
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) {
+      adminLogger.esp32('Tab aktif, refresh status');
       refreshESP32Status();
       socket.emit("getESP32Status");
     }
+  });
+  
+  // PERBAIKAN: Tambah event listener untuk window focus
+  window.addEventListener('focus', function() {
+    adminLogger.esp32('Window focused, refresh status');
+    refreshESP32Status();
   });
 }
 
@@ -313,6 +345,7 @@ function forceUnlockAll() {
 }
 
 function startESP32RealTimePolling() {
+  // PERBAIKAN: Polling lebih sering untuk real-time updates
   setInterval(() => {
     socket.emit("getESP32Status");
     
@@ -324,7 +357,7 @@ function startESP32RealTimePolling() {
       .catch(err => {
         console.error('ESP32 polling error:', err);
       });
-  }, 5000);
+  }, 3000); // PERBAIKAN: 5 detik → 3 detik
   
   setInterval(updateESP32Timestamp, 1000);
 }
@@ -339,6 +372,11 @@ function refreshESP32Status() {
     })
     .then(data => {
       updateESP32Status(data);
+      adminLogger.esp32('Status refreshed', {
+        connected: data.terhubung,
+        lastActivity: data.aktivitasTerakhir,
+        heartbeatCount: data.heartbeatCount
+      });
     })
     .catch(err => {
       adminLogger.error('ESP32 refresh failed:', err);
@@ -370,13 +408,21 @@ function testESP32Connection() {
           resultDiv.innerHTML = `
             <strong>✅ TEST BERHASIL</strong><br>
             <small>${data.pesan}</small><br>
-            <small>Modules: ${esp32Status.modulesDetected}, Teams: ${esp32Status.activeTeams}</small>
+            <small>${data.detail.sejakAktivitasTerakhir} sejak aktivitas terakhir</small>
           `;
           showNotification("✅ ESP32 ONLINE", "success");
+          
+          // Update status dari response
+          updateESP32Status({
+            connected: true,
+            lastActivity: data.detail.aktivitasTerakhir,
+            ip: data.detail.ip
+          });
         } else {
           resultDiv.innerHTML = `
             <strong>❌ TEST GAGAL</strong><br>
-            <small>${data.pesan}</small>
+            <small>${data.pesan}</small><br>
+            <small>${data.saran || ''}</small>
           `;
           showNotification("❌ ESP32 OFFLINE", "error");
         }
@@ -612,11 +658,17 @@ function showNotification(message, type = "success") {
   }, 3000);
 }
 
-// ===== SOCKET EVENTS =====
+// ===== SOCKET EVENTS (PERBAIKAN) =====
 socket.on("connect", () => {
   adminLogger.info('Admin connected');
   const statusDot = document.querySelector('.status-dot');
   if (statusDot) statusDot.style.background = '#4caf50';
+  
+  // PERBAIKAN: Request status ESP32 saat connect
+  setTimeout(() => {
+    socket.emit("getESP32Status");
+    refreshESP32Status();
+  }, 500);
 });
 
 socket.on("disconnect", () => {
@@ -626,6 +678,11 @@ socket.on("disconnect", () => {
 });
 
 socket.on("esp32Status", (status) => {
+  console.log("✅ ESP32 Status received:", {
+    connected: status.connected,
+    lastActivity: status.lastActivity,
+    heartbeatCount: status.heartbeatCount
+  });
   updateESP32Status(status);
 });
 

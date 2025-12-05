@@ -113,7 +113,7 @@ let isTimerRunning = false;
 let audioFinishTimeout = null;
 let lastTimerEvent = null;
 
-// ===== STATE ESP32 =====
+// ===== STATE ESP32 (PERBAIKAN: TIMEOUT DIPERPANJANG) =====
 let esp32Status = {
   connected: false,
   lastActivity: null,
@@ -121,7 +121,10 @@ let esp32Status = {
   ip: null,
   lastCheckin: null,
   connectionType: null,
-  lastBroadcast: null
+  lastBroadcast: null,
+  // PERBAIKAN: Tambah field untuk tracking
+  lastHeartbeat: null,
+  heartbeatCount: 0
 };
 
 // ===== SISTEM LOG OPTIMIZED =====
@@ -133,7 +136,7 @@ const logger = {
   
   error: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[${timestamp}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
+    console.error(`[${timestamp}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
   },
   
   audio: (message, data = null) => {
@@ -447,7 +450,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== SISTEM STATUS ESP32 (PERBAIKAN UTAMA) =====
+// ===== SISTEM STATUS ESP32 (PERBAIKAN UTAMA - TIMEOUT DIPERPANJANG) =====
 function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
   const previousStatus = esp32Status.connected;
   const previousIP = esp32Status.ip;
@@ -457,6 +460,12 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     esp32Status.lastActivity = new Date();
     esp32Status.lastCheckin = new Date();
     esp32Status.connectionType = activityType;
+    
+    // PERBAIKAN: Update heartbeat jika tipe heartbeat
+    if (activityType.includes('heartbeat') || activityType.includes('checkin')) {
+      esp32Status.lastHeartbeat = new Date();
+      esp32Status.heartbeatCount = (esp32Status.heartbeatCount || 0) + 1;
+    }
     
     if (socket) {
       esp32Status.socketId = socket.id;
@@ -469,7 +478,8 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     logger.esp32(`Aktivitas ESP32 - ${activityType}`, {
       ip: ip,
       socketId: socket ? socket.id : 'HTTP',
-      waktu: esp32Status.lastActivity.toLocaleTimeString('id-ID')
+      waktu: esp32Status.lastActivity.toLocaleTimeString('id-ID'),
+      heartbeatCount: esp32Status.heartbeatCount
     });
     
   } else {
@@ -479,50 +489,40 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     }
   }
   
-  // ===== PERBAIKAN: SELALU BROADCAST JIKA ADA AKTIVITAS BARU =====
-  const shouldBroadcast = 
-    previousStatus !== esp32Status.connected || 
-    previousIP !== esp32Status.ip ||
-    !esp32Status.lastBroadcast || 
-    (Date.now() - esp32Status.lastBroadcast.getTime() > 30000) || // 30 detik
-    activityType.includes('buzzer') || // Aktivitas buzzer
-    activityType.includes('heartbeat') || // Heartbeat
-    activityType.includes('activity') || // Aktivitas apa pun
-    activityType.includes('checkin') || // Checkin ESP32
-    activityType.includes('http_'); // Aktivitas HTTP
-  
-  if (shouldBroadcast) {
-    esp32Status.lastBroadcast = new Date();
-    io.emit("esp32Status", esp32Status);
-  }
+  // ===== PERBAIKAN: SELALU BROADCAST STATUS =====
+  io.emit("esp32Status", esp32Status);
+  esp32Status.lastBroadcast = new Date();
 }
 
 function updateESP32FromHTTP(ip, activityType = "http_activity") {
   const now = Date.now();
   const timeSinceLastActivity = esp32Status.lastActivity ? now - esp32Status.lastActivity.getTime() : Infinity;
   
-  // Jika offline atau lebih dari 60 detik tidak aktif, update status
-  if (!esp32Status.connected || timeSinceLastActivity > 60000) {
-    updateESP32Status(true, null, ip, activityType);
-  } else {
-    // Update waktu aktivitas
-    esp32Status.lastActivity = new Date();
-    esp32Status.lastCheckin = new Date();
-    esp32Status.connectionType = activityType;
-  }
+  // PERBAIKAN: Selalu update status jika ada aktivitas HTTP
+  esp32Status.connected = true;
+  esp32Status.lastActivity = new Date();
+  esp32Status.lastCheckin = new Date();
+  esp32Status.connectionType = activityType;
+  esp32Status.ip = ip;
   
   // Broadcast status
   io.emit("esp32Status", esp32Status);
+  logger.esp32(`ESP32 HTTP activity - ${activityType}`, {
+    ip: ip,
+    status: 'ONLINE'
+  });
+  
+  return esp32Status;
 }
 
-// ===== CHECK ESP32 STATUS (TIMEOUT HANDLING) =====
+// ===== CHECK ESP32 STATUS (PERBAIKAN: TIMEOUT DIPERPANJANG) =====
 function checkESP32Status() {
   const now = Date.now();
   if (esp32Status.lastActivity) {
     const timeSinceLastActivity = now - esp32Status.lastActivity.getTime();
     
-    // Jika lebih dari 90 detik tanpa aktivitas, anggap offline
-    if (timeSinceLastActivity > 90000 && esp32Status.connected) {
+    // PERBAIKAN: Timeout diperpanjang dari 90 detik → 300 detik (5 menit)
+    if (timeSinceLastActivity > 300000 && esp32Status.connected) {
       logger.esp32("ESP32 status timeout - marking as disconnected", {
         lastActivity: esp32Status.lastActivity,
         secondsInactive: Math.floor(timeSinceLastActivity / 1000)
@@ -535,7 +535,7 @@ function checkESP32Status() {
   }
 }
 
-// ===== SISTEM TIMER OPTIMIZED (PERBAIKAN UTAMA) =====
+// ===== SISTEM TIMER OPTIMIZED =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.performance("Timer sudah berjalan, abaikan", {
@@ -1007,7 +1007,7 @@ app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
 });
 
-// ===== ROUTE UNTUK ESP32 =====
+// ===== ROUTE UNTUK ESP32 (PERBAIKAN: TAMBAH ENDPOINT HEARTBEAT) =====
 app.get("/esp32checkin", (req, res) => {
   const action = req.query.action || 'heartbeat';
   const team = req.query.team;
@@ -1025,16 +1025,24 @@ app.get("/esp32checkin", (req, res) => {
                   action.includes('admin'));
   
   if (!isAdmin) {
-    // Update status ESP32
-    updateESP32FromHTTP(realIP, `http_${action}`);
+    // Update status ESP32 dengan heartbeat
+    const status = updateESP32FromHTTP(realIP, `heartbeat_${action}`);
     
-    // BROADCAST LANGSUNG KE SEMUA CLIENT
-    io.emit("esp32Status", esp32Status);
+    // Log heartbeat
+    logger.esp32(`ESP32 heartbeat received`, {
+      ip: realIP,
+      action: action,
+      team: team,
+      heartbeatCount: status.heartbeatCount
+    });
+    
+    // Broadcast ke semua client
+    io.emit("esp32Status", status);
     io.emit("esp32Activity", {
       timestamp: new Date(),
       activity: { type: action, team: team },
       ip: realIP,
-      socketId: "HTTP_CHECKIN"
+      socketId: "HTTP_HEARTBEAT"
     });
   }
   
@@ -1044,7 +1052,8 @@ app.get("/esp32checkin", (req, res) => {
     dariESP32: !isAdmin,
     status: esp32Status.connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
     waktu: new Date().toLocaleTimeString('id-ID'),
-    ipAnda: realIP
+    ipAnda: realIP,
+    heartbeatCount: esp32Status.heartbeatCount
   });
 });
 
@@ -1082,6 +1091,9 @@ app.get("/debug/esp32", (req, res) => {
     terhubung: esp32Status.connected,
     aktivitasTerakhir: esp32Status.lastActivity ? 
       new Date(esp32Status.lastActivity).toLocaleTimeString('id-ID') : "Tidak ada",
+    heartbeatTerakhir: esp32Status.lastHeartbeat ?
+      new Date(esp32Status.lastHeartbeat).toLocaleTimeString('id-ID') : "Tidak ada",
+    heartbeatCount: esp32Status.heartbeatCount || 0,
     socketId: esp32Status.socketId,
     ip: esp32Status.ip,
     sejakAktivitasTerakhir: esp32Status.lastActivity ? 
@@ -1216,6 +1228,8 @@ app.get("/esp32status", (req, res) => {
     terhubung: esp32Status.connected,
     aktivitasTerakhir: esp32Status.lastActivity,
     checkinTerakhir: esp32Status.lastCheckin,
+    heartbeatTerakhir: esp32Status.lastHeartbeat,
+    heartbeatCount: esp32Status.heartbeatCount || 0,
     socketId: esp32Status.socketId,
     ip: esp32Status.ip,
     tipeKoneksi: esp32Status.connectionType,
@@ -1225,7 +1239,8 @@ app.get("/esp32status", (req, res) => {
       "Kontrol Juri (Benar/Salah)", 
       "LED Feedback",
       "Konfigurasi WiFi Manager",
-      "Dukungan Audio Trigger"
+      "Dukungan Audio Trigger",
+      "Heartbeat System"
     ],
     status: esp32Status.connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
     uptime: esp32Status.lastActivity ? 
@@ -1242,17 +1257,18 @@ app.get("/testESP32Connection", (req, res) => {
   const timeSinceLastActivity = esp32Status.lastActivity ? 
     Math.floor((now - esp32Status.lastActivity) / 1000) : Infinity;
   
-  const isRecentlyActive = timeSinceLastActivity < 90; // 90 detik terakhir
+  const isRecentlyActive = timeSinceLastActivity < 300; // 300 detik (5 menit)
   
   res.json({
     sukses: isRecentlyActive,
     tipeKoneksi: esp32Status.connectionType || "unknown",
     pesan: isRecentlyActive ? 
-      "ESP32 terdeteksi aktif dalam 90 detik terakhir" : 
-      "ESP32 tidak aktif dalam 90 detik terakhir",
+      "ESP32 terdeteksi aktif dalam 5 menit terakhir" : 
+      "ESP32 tidak aktif dalam 5 menit terakhir",
     detail: {
       terhubung: esp32Status.connected,
       aktivitasTerakhir: esp32Status.lastActivity,
+      heartbeatCount: esp32Status.heartbeatCount,
       ip: esp32Status.ip,
       sejakAktivitasTerakhir: `${timeSinceLastActivity} detik`
     },
@@ -1446,8 +1462,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// ===== MONITORING ESP32 =====
-setInterval(checkESP32Status, 30000); // Cek setiap 30 detik
+// ===== MONITORING ESP32 (PERBAIKAN: INTERVAL DIPERPANJANG) =====
+setInterval(checkESP32Status, 60000); // Cek setiap 60 detik
 
 // ===== MEMULAI SERVER =====
 async function startServer() {
@@ -1455,12 +1471,12 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS - FIXED VERSION');
+    console.log('SISTEM KUIS - ESP32 FIXED VERSION');
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log('PERBAIKAN: Timer sekarang otomatis membuka kunci sistem');
+    console.log('========================================');
   });
 }
 
