@@ -1409,12 +1409,6 @@ async function startServer() {
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log(`Test: http://localhost:${PORT}/test.html`);
-    console.log('========================================');
-    console.log(`ESP32 Real-time Status: AKTIF`);
-    console.log(`- Heartbeat monitoring setiap 30 detik`);
-    console.log(`- Auto-unlock jika timeout`);
-    console.log('========================================');
   });
 }
 
