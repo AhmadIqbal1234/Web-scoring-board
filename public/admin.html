@@ -134,6 +134,36 @@
       font-size: 0.8rem;
       font-weight: normal;
     }
+
+    /* Tombol Force Unlock */
+    .btn-force-unlock {
+      background: linear-gradient(145deg, #ff3366, #cc0044);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 15px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 10px;
+      width: 100%;
+      transition: all 0.3s ease;
+    }
+
+    .btn-force-unlock:hover {
+      background: linear-gradient(145deg, #ff5588, #dd2255);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(255, 51, 102, 0.3);
+    }
+
+    .btn-force-unlock:active {
+      transform: translateY(0);
+    }
+
+    .btn-force-unlock:disabled {
+      background: #666;
+      cursor: not-allowed;
+      transform: none;
+    }
   </style>
   <script>
   // Force favicon load
@@ -204,6 +234,11 @@
           
           <button id="unlock" class="admin-btn btn-unlock">
             BUKA KUNCI TOMBOL
+          </button>
+
+          <!-- Tombol Force Unlock All -->
+          <button id="forceUnlockAll" class="btn-force-unlock">
+            🔓 FORCE UNLOCK ALL (DARI TIMER)
           </button>
         </div>
       </div>

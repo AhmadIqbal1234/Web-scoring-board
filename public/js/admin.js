@@ -240,6 +240,7 @@ function createTeamControls() {
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
+  const forceUnlockBtn = document.getElementById("forceUnlockAll");
   
   if (refreshBtn) {
     refreshBtn.addEventListener("click", refreshESP32Status);
@@ -247,6 +248,10 @@ function initializeESP32Controls() {
   
   if (testBtn) {
     testBtn.addEventListener("click", testESP32Connection);
+  }
+
+  if (forceUnlockBtn) {
+    forceUnlockBtn.addEventListener("click", forceUnlockAll);
   }
   
   startESP32RealTimePolling();
@@ -257,6 +262,54 @@ function initializeESP32Controls() {
       socket.emit("getESP32Status");
     }
   });
+}
+
+// ===== FORCE UNLOCK ALL =====
+function forceUnlockAll() {
+  if (!confirm("Yakin ingin membuka kunci paksa dari semua tim dan timer?\nIni akan membuka semua kunci dan menghentikan timer.")) return;
+  
+  const btn = document.getElementById('forceUnlockAll');
+  const originalText = btn.textContent;
+  
+  btn.disabled = true;
+  btn.textContent = 'MEMPROSES...';
+  
+  fetch('/forceUnlockAll')
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      showNotification("✅ Semua kunci berhasil dibuka paksa!", "success");
+      
+      // Update UI state
+      lockState = { locked: false, activeTeam: null };
+      updateTimerStatus('TIDAK AKTIF', 0);
+      
+      const unlockBtn = document.getElementById("unlock");
+      if (unlockBtn) {
+        unlockBtn.textContent = "Buka Kunci Tombol";
+        unlockBtn.disabled = true;
+      }
+      
+      const juryControls = document.getElementById("juryControls");
+      const waitingLabel = document.getElementById("waitingLabel");
+      const activeTeamLabel = document.getElementById("activeTeamLabel");
+      
+      if (juryControls) juryControls.style.display = "none";
+      if (waitingLabel) waitingLabel.style.display = "block";
+      if (activeTeamLabel) activeTeamLabel.style.display = "none";
+    })
+    .catch(err => {
+      adminLogger.error('Force unlock failed:', err);
+      showNotification("❌ Gagal membuka kunci paksa!", "error");
+    })
+    .finally(() => {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }, 1000);
+    });
 }
 
 function startESP32RealTimePolling() {
@@ -616,6 +669,7 @@ socket.on("lockstate", (state) => {
   lockState = state;
   
   const unlockBtn = document.getElementById("unlock");
+  const forceUnlockBtn = document.getElementById("forceUnlockAll");
   const juryControls = document.getElementById("juryControls");
   const waitingLabel = document.getElementById("waitingLabel");
   const activeTeamLabel = document.getElementById("activeTeamLabel");
@@ -627,6 +681,10 @@ socket.on("lockstate", (state) => {
       `Buka Kunci (Tim ${getTeamLetter(state.activeTeam)} Aktif)` : 
       "Buka Kunci Tombol";
     unlockBtn.disabled = !state.locked;
+  }
+
+  if (forceUnlockBtn) {
+    forceUnlockBtn.disabled = !state.locked;
   }
 
   if (state.locked && state.activeTeam) {
@@ -755,6 +813,7 @@ socket.on("systemUnlocked", (data) => {
   lockState = { locked: false, activeTeam: null };
   
   const unlockBtn = document.getElementById("unlock");
+  const forceUnlockBtn = document.getElementById("forceUnlockAll");
   const juryControls = document.getElementById("juryControls");
   const waitingLabel = document.getElementById("waitingLabel");
   const activeTeamLabel = document.getElementById("activeTeamLabel");
@@ -762,6 +821,10 @@ socket.on("systemUnlocked", (data) => {
   if (unlockBtn) {
     unlockBtn.textContent = "Buka Kunci Tombol";
     unlockBtn.disabled = true;
+  }
+
+  if (forceUnlockBtn) {
+    forceUnlockBtn.disabled = true;
   }
   
   if (juryControls) juryControls.style.display = "none";

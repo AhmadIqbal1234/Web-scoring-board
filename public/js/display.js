@@ -402,7 +402,7 @@ function updateTeamDisplay() {
   }
 }
 
-// ===== OPTIMIZED TIMER DISPLAY =====
+// ===== OPTIMIZED TIMER DISPLAY (PERBAIKAN) =====
 function updateTimerDisplayOptimized(seconds) {
   const timerEl = document.querySelector('.timer');
   if (!timerEl) return;
@@ -415,6 +415,11 @@ function updateTimerDisplayOptimized(seconds) {
       timerEl.classList.remove('normal', 'warning', 'critical');
       timerEl.classList.add('inactive');
       lastTimerValue = 0;
+      
+      // PERBAIKAN: Saat timer 0, reset display juga
+      if (!atomicLockState.locked) {
+        resetDisplay();
+      }
     }
   } else {
     const minutes = Math.floor(seconds / 60);
@@ -822,20 +827,34 @@ socket.on("timerReset", () => {
   
   timerUpdateTimeout = setTimeout(() => {
     resetTimerDisplay();
-    // Hanya reset display jika tidak terkunci
-    if (!atomicLockState.locked) {
-      resetDisplay();
-    }
+    // PERBAIKAN: Selalu reset display saat timer direset
+    resetDisplay();
+    clearAtomicLock();
   }, TIMER_UPDATE_DEBOUNCE);
 });
 
-// ===== SYSTEM UNLOCKED EVENT =====
+// ===== SYSTEM UNLOCKED EVENT (PERBAIKAN UTAMA) =====
 socket.on("systemUnlocked", (data) => {
+  console.log(`[SYSTEM] System unlocked: ${data.reason}`);
+  
+  // Reset semua state lokal
   clearAtomicLock();
   resetDisplay();
   resetTimerDisplay();
   
-  console.log(`[SYSTEM] System unlocked: ${data.reason}`);
+  // Update UI
+  const timerEl = document.querySelector('.timer');
+  if (timerEl) {
+    timerEl.textContent = '00:00';
+    timerEl.classList.remove('normal', 'warning', 'critical');
+    timerEl.classList.add('inactive');
+  }
+  
+  // Reset active team
+  currentActiveTeam = 0;
+  
+  // Log untuk debugging
+  console.log(`[SYSTEM] Display reset completed for reason: ${data.reason}`);
 });
 
 // Event untuk timer reset confirm
@@ -892,7 +911,7 @@ function checkTimerStatus() {
 // ===== INITIALIZE =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
-  console.log('[DISPLAY] Initialized - Fixed Version');
+  console.log('[DISPLAY] Initialized - Fixed Version with Timer Unlock Fix');
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {

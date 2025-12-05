@@ -535,7 +535,7 @@ function checkESP32Status() {
   }
 }
 
-// ===== SISTEM TIMER OPTIMIZED =====
+// ===== SISTEM TIMER OPTIMIZED (PERBAIKAN UTAMA) =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.performance("Timer sudah berjalan, abaikan", {
@@ -602,12 +602,19 @@ function stopTimer(activeTeam = null) {
   
   isTimerRunning = false;
   
+  // PERBAIKAN: Selalu buka kunci saat timer dihentikan
+  if (lockState.locked) {
+    releaseAtomicLock();
+  }
+  
   io.emit("timerReset");
+  io.emit("lockstate", lockState); // Kirim state terbaru
   lastTimerEvent = 'timerReset';
 
   logger.performance("Timer dihentikan", { 
     timAktif: activeTeam,
-    lastTimerEvent: lastTimerEvent
+    lastTimerEvent: lastTimerEvent,
+    lockState: lockState
   });
 }
 
@@ -625,13 +632,21 @@ function resetTimer() {
   isTimerRunning = false;
   timeRemaining = 0;
   
+  // PERBAIKAN: Selalu buka kunci saat timer direset
+  if (lockState.locked) {
+    releaseAtomicLock();
+  }
+  
   io.emit("timerReset");
+  io.emit("lockstate", lockState); // Kirim state terbaru
   lastTimerEvent = 'timerReset';
   
   // Reset lockTime juga
   lockState.lockTime = null;
   
-  logger.performance("Timer direset manual");
+  logger.performance("Timer direset manual", {
+    lockState: lockState
+  });
 }
 
 // ===== FUNGSI BUKA KUNSI PAKSA =====
@@ -858,6 +873,42 @@ app.get("/debug/timer/fix", (req, res) => {
       lastTimerEvent: lastTimerEvent
     },
     statusKunci: lockState
+  });
+});
+
+// ===== ENDPOINT BARU: FORCE UNLOCK ALL =====
+app.get("/forceUnlockAll", (req, res) => {
+  logger.info("Force unlock all requested");
+  
+  // Reset semua state
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  
+  isTimerRunning = false;
+  timeRemaining = 0;
+  
+  // Buka semua kunci
+  releaseAtomicLock();
+  
+  // Pastikan lock state benar-benar reset
+  lockState = { 
+    locked: false, 
+    activeTeam: null,
+    lockTime: null
+  };
+  
+  // Broadcast ke semua client
+  io.emit("lockstate", lockState);
+  io.emit("timerReset");
+  io.emit("systemUnlocked", { reason: "force_unlock_all" });
+  
+  res.json({
+    sukses: true,
+    pesan: "Semua kunci dibuka paksa",
+    lockState: lockState,
+    timerRunning: isTimerRunning
   });
 });
 
@@ -1409,6 +1460,7 @@ async function startServer() {
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
+    console.log('PERBAIKAN: Timer sekarang otomatis membuka kunci sistem');
   });
 }
 
