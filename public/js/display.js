@@ -10,18 +10,19 @@ let atomicLockState = {
   locked: false,
   activeTeam: 0,
   lockTime: 0,
-  lastBuzzTime: 0
+  lastBuzzTime: 0,
+  lockId: null
 };
 
 // ===== PERFORMANCE OPTIMIZATION =====
-const BUTTON_COOLDOWN = 50;
+const BUTTON_COOLDOWN = 10; // DITURUNKAN: 50ms → 10ms
 let lastButtonProcessTime = 0;
 let currentActiveTeam = 0;
 
 // Timer optimization
 let lastTimerValue = 0;
 let timerUpdateTimeout = null;
-const TIMER_UPDATE_DEBOUNCE = 50;
+const TIMER_UPDATE_DEBOUNCE = 30; // DITURUNKAN: 50ms → 30ms
 
 // ===== SISTEM AUDIO FILE =====
 class SistemAudioTim {
@@ -304,12 +305,19 @@ function getTeamAudioFile(teamNumber) {
   return `Tim ${teamLetter}.mp3`;
 }
 
-// ===== ATOMIC LOCK FUNCTIONS =====
+// ===== ATOMIC LOCK FUNCTIONS - OPTIMIZED =====
 function checkAtomicLock(team) {
   const now = Date.now();
+  const lockThreshold = 3; // Threshold 3ms untuk responsivitas maksimal
   
   if (atomicLockState.locked) {
     const lockAge = now - atomicLockState.lockTime;
+    
+    // Jika lock sangat baru (dalam threshold), langsung tolak
+    if (lockAge < lockThreshold) {
+      console.log(`[ATOMIC] Tim ${getTeamLetter(team)} ditolak - lock terlalu baru (${lockAge}ms)`);
+      return false;
+    }
     
     // Jika sudah terkunci oleh tim lain
     if (atomicLockState.activeTeam !== team) {
@@ -334,7 +342,8 @@ function setAtomicLock(team) {
     locked: true,
     activeTeam: team,
     lockTime: Date.now(),
-    lastBuzzTime: Date.now()
+    lastBuzzTime: Date.now(),
+    lockId: `client_lock_${Date.now()}_${team}`
   };
   
   console.log(`[ATOMIC] Tim ${getTeamLetter(team)} atomic locked`);
@@ -345,7 +354,8 @@ function clearAtomicLock() {
     locked: false,
     activeTeam: 0,
     lockTime: 0,
-    lastBuzzTime: 0
+    lastBuzzTime: 0,
+    lockId: null
   };
   
   console.log('[ATOMIC] Lock cleared');
@@ -402,7 +412,7 @@ function updateTeamDisplay() {
   }
 }
 
-// ===== OPTIMIZED TIMER DISPLAY (PERBAIKAN) =====
+// ===== OPTIMIZED TIMER DISPLAY =====
 function updateTimerDisplayOptimized(seconds) {
   const timerEl = document.querySelector('.timer');
   if (!timerEl) return;
@@ -416,7 +426,7 @@ function updateTimerDisplayOptimized(seconds) {
       timerEl.classList.add('inactive');
       lastTimerValue = 0;
       
-      // PERBAIKAN: Saat timer 0, reset display juga
+      // Saat timer 0, reset display juga
       if (!atomicLockState.locked) {
         resetDisplay();
       }
@@ -528,6 +538,7 @@ function loadInitialData() {
       atomicLockState.locked = lockStateData.locked || false;
       atomicLockState.activeTeam = lockStateData.activeTeam || 0;
       atomicLockState.lockTime = lockStateData.lockTime || 0;
+      atomicLockState.lockId = lockStateData.lockId || null;
       
       if (lockStateData.locked && lockStateData.activeTeam) {
         showActiveTeam(lockStateData.activeTeam);
@@ -564,11 +575,11 @@ socket.on("disconnect", () => {
   }
 });
 
-// ===== ATOMIC BUZZ EVENT =====
+// ===== ATOMIC BUZZ EVENT - OPTIMIZED =====
 socket.on("buzz", ({ team }) => {
   const now = Date.now();
   
-  console.log(`[BUZZ] Event received for Team ${getTeamLetter(team)}`);
+  console.log(`[BUZZ] Event received for Team ${getTeamLetter(team)} at ${now}`);
   
   // Cooldown check
   if (now - lastButtonProcessTime < BUTTON_COOLDOWN) {
@@ -578,9 +589,9 @@ socket.on("buzz", ({ team }) => {
   
   lastButtonProcessTime = now;
   
-  // Atomic lock check
+  // Atomic lock check dengan threshold 3ms
   if (!checkAtomicLock(team)) {
-    console.log(`[BUZZ] Atomic lock check failed`);
+    console.log(`[BUZZ] Atomic lock check failed for Team ${getTeamLetter(team)}`);
     return;
   }
   
@@ -673,8 +684,9 @@ socket.on("lockstate", state => {
   atomicLockState.locked = state.locked || false;
   atomicLockState.activeTeam = state.activeTeam || 0;
   atomicLockState.lockTime = state.lockTime || 0;
+  atomicLockState.lockId = state.lockId || null;
   
-  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)}` : 'Unlocked'}`);
+  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)} (ID: ${state.lockId})` : 'Unlocked'}`);
   
   if (!state.locked) {
     resetDisplay();
@@ -827,13 +839,13 @@ socket.on("timerReset", () => {
   
   timerUpdateTimeout = setTimeout(() => {
     resetTimerDisplay();
-    // PERBAIKAN: Selalu reset display saat timer direset
+    // Selalu reset display saat timer direset
     resetDisplay();
     clearAtomicLock();
   }, TIMER_UPDATE_DEBOUNCE);
 });
 
-// ===== SYSTEM UNLOCKED EVENT (PERBAIKAN UTAMA) =====
+// ===== SYSTEM UNLOCKED EVENT =====
 socket.on("systemUnlocked", (data) => {
   console.log(`[SYSTEM] System unlocked: ${data.reason}`);
   
@@ -911,7 +923,8 @@ function checkTimerStatus() {
 // ===== INITIALIZE =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
-  console.log('[DISPLAY] Initialized - Fixed Version with Timer Unlock Fix');
+  console.log('[DISPLAY] Initialized - Responsive Button Version');
+  console.log('[OPTIMIZATION] Button cooldown: 10ms, Lock threshold: 3ms');
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {
@@ -923,7 +936,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (atomicLockState.locked) {
         const lockAge = Date.now() - atomicLockState.lockTime;
         console.log(`[DEBUG] Atomic Lock: Team ${getTeamLetter(atomicLockState.activeTeam)} ` +
-                   `(locked ${lockAge}ms ago)`);
+                   `(locked ${lockAge}ms ago, ID: ${atomicLockState.lockId})`);
       }
     }, 5000);
   }

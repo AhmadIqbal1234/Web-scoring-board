@@ -107,6 +107,11 @@ const unsigned long BUTTON_LED_DURATION = 500;
 const unsigned long WATCHDOG_TIMEOUT   = 30000;
 const unsigned long HTTP_SEND_TIMEOUT  = 800;     // Timeout send HTTP
 
+// ====== HEARTBEAT SYSTEM (PERBAIKAN BARU) ======
+unsigned long lastHeartbeatTime = 0;
+const unsigned long HEARTBEAT_INTERVAL = 30000;   // Setiap 30 detik
+unsigned long heartbeatCount = 0;
+
 // ====== STATE ======
 char serverHost[64];
 int  serverPort = DEFAULT_SERVER_PORT;
@@ -142,6 +147,47 @@ int getModuleIndex(uint8_t moduleAddress) {
     if (MODULE_ADDRESSES[i] == moduleAddress) return i;
   }
   return -1;
+}
+
+// ========== HEARTBEAT FUNCTIONS (PERBAIKAN BARU) ==========
+void sendHeartbeatToServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[HEARTBEAT] WiFi tidak terhubung, skip heartbeat");
+    return;
+  }
+  
+  String url = "https://" + String(serverHost) + "/esp32checkin?action=heartbeat&count=" + String(heartbeatCount);
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  
+  bool success = http.begin(url);
+  if (success) {
+    int code = http.GET();
+    unsigned long elapsed = millis() - lastHeartbeatTime;
+    
+    Serial.printf("[HEARTBEAT] #%d -> Code: %d, Time: %dms\n", 
+                  heartbeatCount, code, elapsed);
+    
+    http.end();
+    
+    if (code == 200) {
+      heartbeatCount++;
+    }
+  } else {
+    Serial.println("[HEARTBEAT] Gagal memulai koneksi");
+  }
+}
+
+void handleHeartbeat() {
+  unsigned long now = millis();
+  
+  if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+    lastHeartbeatTime = now;
+    sendHeartbeatToServer();
+  }
 }
 
 // ========== ATOMIC LOCK MANAGEMENT ==========
@@ -878,8 +924,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n========================================");
-  Serial.println("QUIZ SCORING SYSTEM - ATOMIC FIX VERSION");
-  Serial.println("FIXED: Race condition pada tombol");
+  Serial.println("QUIZ SCORING SYSTEM - HEARTBEAT VERSION");
+  Serial.println("FIXED: ESP32 Heartbeat untuk status online");
   Serial.println("========================================");
   
   // Initialize Status LED Pins
@@ -889,10 +935,10 @@ void setup() {
   digitalWrite(LED_MERAH, LOW);
   digitalWrite(LED_HIJAU, LOW);
   
-  Serial.println("ATOMIC LOCK SYSTEM:");
-  Serial.println("  - Global lock untuk mencegah race condition");
-  Serial.println("  - Hanya tim pertama yang akan terkunci");
-  Serial.println("  - Auto-release lock setelah 2 detik");
+  Serial.println("HEARTBEAT SYSTEM:");
+  Serial.println("  - Kirim heartbeat setiap 30 detik");
+  Serial.println("  - Timeout server: 300 detik (5 menit)");
+  Serial.println("  - Status tetap ONLINE meski tidak ada aktivitas");
   Serial.println("");
   
   // Initialize I2C
@@ -915,12 +961,16 @@ void setup() {
   // Setup WiFi
   setupWiFiManager();
   
-  Serial.println("\n[INIT] System ready - Atomic lock enabled");
+  // Kirim heartbeat pertama
+  lastHeartbeatTime = millis();
+  sendHeartbeatToServer();
+  
+  Serial.println("\n[INIT] System ready - Heartbeat enabled");
   Serial.printf("[INIT] Free Heap: %d bytes\n", ESP.getFreeHeap());
   Serial.println("========================================\n");
 }
 
-// ====== OPTIMIZED MAIN LOOP ======
+// ====== OPTIMIZED MAIN LOOP DENGAN HEARTBEAT ======
 void loop() {
   unsigned long now = millis();
   
@@ -930,19 +980,22 @@ void loop() {
   // 2. Handle pending requests dan lock management
   handlePendingRequests();
   
-  // 3. Tombol juri
+  // 3. HEARTBEAT SYSTEM (PERBAIKAN BARU)
+  handleHeartbeat();
+  
+  // 4. Tombol juri
   handleJuryButtons();
   
-  // 4. Update LED state
+  // 5. Update LED state
   updateButtonLEDs();
   
-  // 5. WiFi reset feature
+  // 6. WiFi reset feature
   handleWifiReset();
   
-  // 6. Status LED update
+  // 7. Status LED update
   updateStatusLED();
   
-  // 7. Background tasks (100ms interval)
+  // 8. Background tasks (100ms interval)
   static unsigned long lastBackgroundCheck = 0;
   if (now - lastBackgroundCheck >= 100) {
     lastBackgroundCheck = now;
@@ -952,28 +1005,28 @@ void loop() {
     checkWiFiConnection();
   }
   
-  // 8. HTTP polling untuk lock state (1 detik)
+  // 9. HTTP polling untuk lock state (1 detik)
   static unsigned long lastLockPoll = 0;
   if (now - lastLockPoll >= LOCK_POLL_MS) {
     lastLockPoll = now;
     pollLockState();
   }
   
-  // 9. System status check (10 detik)
+  // 10. System status check (10 detik)
   static unsigned long lastStatusCheck = 0;
   if (now - lastStatusCheck >= 10000) {
     lastStatusCheck = now;
     checkSystemStatus();
   }
   
-  // 10. Health check (30 detik)
+  // 11. Health check (30 detik)
   static unsigned long lastHealthCheck = 0;
   if (now - lastHealthCheck >= 30000) {
     lastHealthCheck = now;
     safeHealthCheck();
   }
   
-  // 11. Module scan dan I2C health (5 detik)
+  // 12. Module scan dan I2C health (5 detik)
   static unsigned long lastModuleScan = 0;
   if (now - lastModuleScan >= MODULE_SCAN_MS) {
     lastModuleScan = now;
@@ -981,6 +1034,6 @@ void loop() {
     checkI2CHealth();
   }
   
-  // 12. Minimal delay untuk menjaga responsivitas
+  // 13. Minimal delay untuk menjaga responsivitas
   delay(1);
 }

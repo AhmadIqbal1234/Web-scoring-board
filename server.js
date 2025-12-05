@@ -101,7 +101,8 @@ let config = { plus: 5, minus: -2, timerDuration: 30 };
 let lockState = { 
   locked: false, 
   activeTeam: null,
-  lockTime: null  // Timestamp ketika terkunci
+  lockTime: null,  // Timestamp ketika terkunci
+  lockId: null     // ID unik untuk lock
 };
 let teamToggleState = Array(TEAM_COUNT).fill(true);
 let isAutoPenaltyEnabled = true;
@@ -113,7 +114,7 @@ let isTimerRunning = false;
 let audioFinishTimeout = null;
 let lastTimerEvent = null;
 
-// ===== STATE ESP32 (PERBAIKAN: TIMEOUT DIPERPANJANG) =====
+// ===== STATE ESP32 =====
 let esp32Status = {
   connected: false,
   lastActivity: null,
@@ -122,7 +123,6 @@ let esp32Status = {
   lastCheckin: null,
   connectionType: null,
   lastBroadcast: null,
-  // PERBAIKAN: Tambah field untuk tracking
   lastHeartbeat: null,
   heartbeatCount: 0
 };
@@ -256,26 +256,48 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// ===== ATOMIC LOCK FUNCTIONS =====
+// ===== ATOMIC LOCK FUNCTIONS - OPTIMIZED FOR RESPONSIVENESS =====
 function acquireAtomicLock(team) {
   const now = Date.now();
+  const lockThreshold = 3; // Threshold 3ms untuk responsivitas maksimal
   
   if (lockState.locked) {
     const lockAge = now - (lockState.lockTime || now);
-    logger.lock(`Lock DENIED untuk Tim ${getTeamLetter(team)} - ` +
-               `sudah terkunci oleh Tim ${getTeamLetter(lockState.activeTeam)} ` +
-               `(${lockAge}ms yang lalu)`);
-    return false;
+    
+    // Jika lock sangat baru (dalam threshold), abaikan semua request lain
+    if (lockAge < lockThreshold) {
+      logger.lock(`Lock DITOLAK - Tim ${getTeamLetter(team)} terlambat ${lockAge}ms`);
+      return false;
+    }
+    
+    // Jika sudah terkunci oleh tim lain
+    if (lockState.activeTeam !== team) {
+      const lockAge = now - (lockState.lockTime || now);
+      logger.lock(`Lock DENIED untuk Tim ${getTeamLetter(team)} - ` +
+                 `sudah terkunci oleh Tim ${getTeamLetter(lockState.activeTeam)} ` +
+                 `(${lockAge}ms yang lalu)`);
+      return false;
+    }
+    
+    // Jika terkunci oleh tim yang sama tapi baru saja (anti-duplicate)
+    if (lockAge < 100) {
+      logger.lock(`Duplikat buzz dari Tim ${getTeamLetter(team)} diabaikan`);
+      return false;
+    }
   }
   
-  // ATOMIC: Set lock
+  // ATOMIC: Set lock dengan timestamp presisi dan ID unik
   lockState = { 
     locked: true, 
     activeTeam: team,
-    lockTime: now
+    lockTime: now,
+    lockId: `lock_${now}_${team}_${Math.random().toString(36).substr(2, 9)}`
   };
   
-  logger.lock(`Lock ACQUIRED untuk Tim ${getTeamLetter(team)} pada ${now}`);
+  logger.lock(`Lock ACQUIRED untuk Tim ${getTeamLetter(team)} pada ${now}`, {
+    lockId: lockState.lockId,
+    timestamp: now
+  });
   return true;
 }
 
@@ -284,7 +306,8 @@ function releaseAtomicLock() {
   lockState = { 
     locked: false, 
     activeTeam: null,
-    lockTime: null
+    lockTime: null,
+    lockId: null
   };
   logger.lock(`Lock RELEASED (previous active: ${previousActive ? getTeamLetter(previousActive) : 'none'})`);
 }
@@ -450,7 +473,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== SISTEM STATUS ESP32 (PERBAIKAN UTAMA - TIMEOUT DIPERPANJANG) =====
+// ===== SISTEM STATUS ESP32 =====
 function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
   const previousStatus = esp32Status.connected;
   const previousIP = esp32Status.ip;
@@ -461,7 +484,7 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     esp32Status.lastCheckin = new Date();
     esp32Status.connectionType = activityType;
     
-    // PERBAIKAN: Update heartbeat jika tipe heartbeat
+    // Update heartbeat jika tipe heartbeat
     if (activityType.includes('heartbeat') || activityType.includes('checkin')) {
       esp32Status.lastHeartbeat = new Date();
       esp32Status.heartbeatCount = (esp32Status.heartbeatCount || 0) + 1;
@@ -489,14 +512,13 @@ function updateESP32Status(connected, socket = null, ip = null, activityType = "
     }
   }
   
-  // ===== PERBAIKAN: SELALU BROADCAST STATUS =====
+  // SELALU BROADCAST STATUS
   io.emit("esp32Status", esp32Status);
   esp32Status.lastBroadcast = new Date();
 }
 
 function updateESP32FromHTTP(ip, activityType = "http_activity") {
   const now = Date.now();
-  const timeSinceLastActivity = esp32Status.lastActivity ? now - esp32Status.lastActivity.getTime() : Infinity;
   
   // PERBAIKAN: Selalu update status jika ada aktivitas HTTP
   esp32Status.connected = true;
@@ -515,13 +537,13 @@ function updateESP32FromHTTP(ip, activityType = "http_activity") {
   return esp32Status;
 }
 
-// ===== CHECK ESP32 STATUS (PERBAIKAN: TIMEOUT DIPERPANJANG) =====
+// ===== CHECK ESP32 STATUS =====
 function checkESP32Status() {
   const now = Date.now();
   if (esp32Status.lastActivity) {
     const timeSinceLastActivity = now - esp32Status.lastActivity.getTime();
     
-    // PERBAIKAN: Timeout diperpanjang dari 90 detik → 300 detik (5 menit)
+    // Timeout diperpanjang dari 90 detik → 300 detik (5 menit)
     if (timeSinceLastActivity > 300000 && esp32Status.connected) {
       logger.esp32("ESP32 status timeout - marking as disconnected", {
         lastActivity: esp32Status.lastActivity,
@@ -649,7 +671,7 @@ function resetTimer() {
   });
 }
 
-// ===== FUNGSI BUKA KUNSI PAKSA =====
+// ===== FUNGSI BUKA KUNCI PAKSA =====
 function forceUnlockSystem() {
   logger.info("BUKA KUNCI PAKSA: Buka kunci manual atau darurat");
   
@@ -699,19 +721,13 @@ function playBuzzerThenTeamAudio(team) {
   });
 }
 
-// ===== ENDPOINT UPDATE DENGAN ATOMIC LOCK =====
+// ===== ENDPOINT UPDATE DENGAN ATOMIC LOCK OPTIMIZED =====
 app.get("/update", (req, res) => {
   const startTime = Date.now();
   const requestTime = Date.now();
+  const clientIP = req.ip || req.connection.remoteAddress;
   
-  // LOG DETAILED REQUEST
-  logger.info(`[UPDATE REQUEST]`, {
-    query: req.query,
-    ip: req.ip,
-    headers: req.headers,
-    timestamp: new Date().toISOString()
-  });
-  
+  // EXTREME FAST PATH: Validasi cepat
   if (!req.query.team) {
     logger.error("UPDATE: Missing team parameter");
     return res.status(400).json({ error: "Parameter team diperlukan" });
@@ -719,7 +735,13 @@ app.get("/update", (req, res) => {
 
   const team = parseInt(req.query.team);
   
-  // Cek toggle state
+  // Validasi ultra-cepat
+  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+    logger.error(`UPDATE: Invalid team ${team}`);
+    return res.status(400).json({ error: "Tim tidak valid" });
+  }
+  
+  // Cek toggle state - cache lokal untuk kecepatan
   if (!teamToggleState[team - 1]) {
     logger.error(`UPDATE: Team ${team} disabled`);
     return res.status(403).json({ error: "Tombol tim dinonaktifkan" });
@@ -728,24 +750,17 @@ app.get("/update", (req, res) => {
   const add = parseInt(req.query.add) || 0;
   const isFirst = req.query.first === "1";
 
-  // Validasi
-  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-    logger.error(`UPDATE: Invalid team ${team}`);
-    return res.status(400).json({ error: "Tim tidak valid" });
-  }
-
   // Update ESP32 status
-  const ip = req.ip || req.connection.remoteAddress;
-  logger.esp32(`UPDATE from IP: ${ip}, Team: ${team}, First: ${isFirst}`);
+  logger.esp32(`UPDATE from IP: ${clientIP}, Team: ${team}, First: ${isFirst}`);
   
-  if (ip.includes('192.168.1.') || ip.includes('172.') || ip.includes('10.')) {
+  if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
     const activityType = `buzzer_${isFirst ? 'tekan_pertama' : 'scoring'}`;
-    updateESP32FromHTTP(ip, activityType);
+    updateESP32FromHTTP(clientIP, activityType);
   }
 
-  // ===== ATOMIC LOCK HANDLING =====
+  // ===== ATOMIC LOCK HANDLING ULTRA-FAST =====
   if (isFirst) {
-    // Coba acquire atomic lock
+    // Coba acquire atomic lock dengan threshold 3ms
     if (!acquireAtomicLock(team)) {
       const lockAge = Date.now() - (lockState.lockTime || Date.now());
       const currentTeam = lockState.activeTeam;
@@ -758,8 +773,8 @@ app.get("/update", (req, res) => {
         error: "Tombol terkunci",
         lockedBy: currentTeam,
         lockAge: `${lockAge}ms`,
-        message: `Tim ${getTeamLetter(currentTeam)} sudah menekan tombol terlebih dahulu`,
-        timestamp: requestTime
+        message: `Tim ${getTeamLetter(currentTeam)} lebih cepat ${lockAge}ms`,
+        responseTime: `${Date.now() - startTime}ms`
       });
     }
     
@@ -776,7 +791,7 @@ app.get("/update", (req, res) => {
     });
   }
 
-  // Handle scoring
+  // Handle scoring dengan optimasi
   if (add !== 0) {
     logger.info(`Scoring: Team ${team} add ${add} points`);
     scores[team - 1] += add;
@@ -803,7 +818,7 @@ app.get("/update", (req, res) => {
     });
   }
 
-  // Response cepat
+  // Response ultra-cepat
   const responseTime = Date.now() - startTime;
   
   logger.performance(`UPDATE Response time: ${responseTime}ms`, { 
@@ -822,7 +837,7 @@ app.get("/update", (req, res) => {
     responseTime: `${responseTime}ms`,
     locked: lockState.locked,
     lockedBy: lockState.activeTeam,
-    lockTime: lockState.lockTime
+    lockId: lockState.lockId
   });
 });
 
@@ -896,7 +911,8 @@ app.get("/forceUnlockAll", (req, res) => {
   lockState = { 
     locked: false, 
     activeTeam: null,
-    lockTime: null
+    lockTime: null,
+    lockId: null
   };
   
   // Broadcast ke semua client
@@ -960,7 +976,7 @@ app.get("/toggleTeam", (req, res) => {
   const team = parseInt(req.query.team);
   const enabled = req.query.enabled === 'true';
   
-  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+  if (!Number.isInteger(team) || team < 1 || team <= TEAM_COUNT) {
     return res.status(400).json({ error: "Tim tidak valid" });
   }
   
@@ -1007,7 +1023,7 @@ app.get("/teamToggleState", (req, res) => {
   res.json(teamToggleState);
 });
 
-// ===== ROUTE UNTUK ESP32 (PERBAIKAN: TAMBAH ENDPOINT HEARTBEAT) =====
+// ===== ROUTE UNTUK ESP32 =====
 app.get("/esp32checkin", (req, res) => {
   const action = req.query.action || 'heartbeat';
   const team = req.query.team;
@@ -1462,7 +1478,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// ===== MONITORING ESP32 (PERBAIKAN: INTERVAL DIPERPANJANG) =====
+// ===== MONITORING ESP32 =====
 setInterval(checkESP32Status, 60000); // Cek setiap 60 detik
 
 // ===== MEMULAI SERVER =====
@@ -1471,7 +1487,7 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS - ESP32 FIXED VERSION');
+    console.log('SISTEM KUIS');
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);

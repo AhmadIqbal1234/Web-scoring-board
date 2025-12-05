@@ -16,7 +16,7 @@ let esp32Status = {
   connectionType: null,
   activeTeams: 12,
   modulesDetected: 4,
-  heartbeatCount: 0  // PERBAIKAN: Tambah field heartbeat
+  heartbeatCount: 0
 };
 
 // ===== LOGGER =====
@@ -42,7 +42,7 @@ function getTeamLetter(index) {
   return String.fromCharCode(64 + index);
 }
 
-// ===== UPDATE ESP32 STATUS (PERBAIKAN) =====
+// ===== UPDATE ESP32 STATUS =====
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -106,7 +106,7 @@ function updateESP32Status(status) {
   
   updateESP32Timestamp();
   
-  // PERBAIKAN: Log status perubahan
+  // Log status perubahan
   if (sebelumnyaOnline !== esp32Status.connected) {
     const pesan = esp32Status.connected ? 
       `ESP32 terhubung! (${esp32Status.modulesDetected} modul, ${esp32Status.activeTeams} tim)` : 
@@ -122,7 +122,7 @@ function updateESP32Status(status) {
   }
 }
 
-// ===== UPDATE TIMESTAMP (PERBAIKAN) =====
+// ===== UPDATE TIMESTAMP =====
 function updateESP32Timestamp() {
   const now = new Date();
   const lastActivity = esp32Status.lastActivity ? new Date(esp32Status.lastActivity) : null;
@@ -146,8 +146,8 @@ function updateESP32Timestamp() {
         timestampElement.style.color = "#f44336";
       }
       
-      // PERBAIKAN: Auto-refresh jika mendekati timeout
-      if (timeDiff > 240 && timeDiff < 300) { // 4-5 menit
+      // Auto-refresh jika mendekati timeout
+      if (timeDiff > 240 && timeDiff < 300) {
         if (!document.hidden) {
           refreshESP32Status();
         }
@@ -260,7 +260,7 @@ function createTeamControls() {
   teamsContainer.appendChild(secondRow);
 }
 
-// ===== ESP32 CONTROLS (PERBAIKAN) =====
+// ===== ESP32 CONTROLS =====
 function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
@@ -280,7 +280,7 @@ function initializeESP32Controls() {
   
   startESP32RealTimePolling();
   
-  // PERBAIKAN: Auto-refresh saat tab aktif
+  // Auto-refresh saat tab aktif
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) {
       adminLogger.esp32('Tab aktif, refresh status');
@@ -289,7 +289,7 @@ function initializeESP32Controls() {
     }
   });
   
-  // PERBAIKAN: Tambah event listener untuk window focus
+  // Tambah event listener untuk window focus
   window.addEventListener('focus', function() {
     adminLogger.esp32('Window focused, refresh status');
     refreshESP32Status();
@@ -345,7 +345,7 @@ function forceUnlockAll() {
 }
 
 function startESP32RealTimePolling() {
-  // PERBAIKAN: Polling lebih sering untuk real-time updates
+  // Polling lebih sering untuk real-time updates
   setInterval(() => {
     socket.emit("getESP32Status");
     
@@ -357,7 +357,7 @@ function startESP32RealTimePolling() {
       .catch(err => {
         console.error('ESP32 polling error:', err);
       });
-  }, 3000); // PERBAIKAN: 5 detik → 3 detik
+  }, 3000); // 3 detik untuk real-time
   
   setInterval(updateESP32Timestamp, 1000);
 }
@@ -631,40 +631,39 @@ function handleJuryMinus() {
     });
 }
 
-// ===== NOTIFICATION =====
+// ===== HIGH-SPEED NOTIFICATION =====
 function showNotification(message, type = "success") {
-  const existingNotification = document.querySelector('.admin-notification');
-  if (existingNotification) {
-    existingNotification.remove();
-  }
-  
-  const notification = document.createElement('div');
-  notification.className = `admin-notification ${type}`;
-  notification.textContent = message;
-  
-  document.body.appendChild(notification);
-  
-  setTimeout(() => {
-    notification.classList.add('show');
-  }, 100);
-  
-  setTimeout(() => {
-    notification.classList.remove('show');
+  // Gunakan requestAnimationFrame untuk rendering cepat
+  requestAnimationFrame(() => {
+    const existingNotification = document.querySelector('.admin-notification');
+    if (existingNotification) {
+      existingNotification.remove();
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `admin-notification ${type}`;
+    notification.textContent = message;
+    
+    document.body.appendChild(notification);
+    
+    // Animasi masuk cepat
+    setTimeout(() => notification.classList.add('show'), 10);
+    
+    // Auto remove cepat
     setTimeout(() => {
-      if (notification.parentNode) {
-        notification.parentNode.removeChild(notification);
-      }
-    }, 500);
-  }, 3000);
+      notification.classList.remove('show');
+      setTimeout(() => notification.remove(), 300);
+    }, 2000);
+  });
 }
 
-// ===== SOCKET EVENTS (PERBAIKAN) =====
+// ===== SOCKET EVENTS =====
 socket.on("connect", () => {
   adminLogger.info('Admin connected');
   const statusDot = document.querySelector('.status-dot');
   if (statusDot) statusDot.style.background = '#4caf50';
   
-  // PERBAIKAN: Request status ESP32 saat connect
+  // Request status ESP32 saat connect
   setTimeout(() => {
     socket.emit("getESP32Status");
     refreshESP32Status();
@@ -962,5 +961,6 @@ function initializeAdmin() {
 // ===== START =====
 document.addEventListener('DOMContentLoaded', function() {
   adminLogger.info('Admin panel initializing...');
+  console.log('[OPTIMIZATION] Responsive button system enabled');
   initializeAdmin();
 });
