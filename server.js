@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -58,7 +58,10 @@ const limiter = rateLimit({
       '/esp32status',
       '/config',
       '/lockstate',
-      '/update'
+      '/update',
+      '/checktimer',
+      '/timerstatus',
+      '/synctimer'
     ];
     
     const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
@@ -691,6 +694,79 @@ function playBuzzerThenTeamAudio(team) {
     timerDuration: config.timerDuration
   });
 }
+
+// ===== ENDPOINT BARU: CHECK TIMER STATUS UNTUK ESP32 =====
+app.get("/checktimer", (req, res) => {
+  const clientIP = req.ip || req.connection.remoteAddress;
+  const team = parseInt(req.query.team) || 0;
+  
+  console.log(`[CHECKTIMER] Request dari ${clientIP}, Team: ${team || 'none'}`);
+  
+  // Update ESP32 activity
+  if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
+    updateESP32FromHTTP(clientIP, `timer_check_team${team}`);
+  }
+  
+  // Prepare response
+  const response = {
+    timerActive: isTimerRunning,
+    lockActive: lockState.locked,
+    timeRemaining: timeRemaining,
+    lockedByTeam: lockState.activeTeam,
+    timestamp: Date.now(),
+    serverTime: new Date().toLocaleTimeString('id-ID')
+  };
+  
+  // Log untuk debugging
+  console.log(`[CHECKTIMER] Response:`, {
+    timerActive: response.timerActive,
+    lockActive: response.lockActive,
+    timeRemaining: response.timeRemaining,
+    lockedBy: response.lockedByTeam ? getTeamLetter(response.lockedByTeam) : 'none'
+  });
+  
+  // Kirim response JSON
+  res.setHeader('Content-Type', 'application/json');
+  res.json(response);
+});
+
+// ===== ENDPOINT UNTUK GET TIMER STATUS SAJA =====
+app.get("/timerstatus", (req, res) => {
+  const response = {
+    timerRunning: isTimerRunning,
+    timeRemaining: timeRemaining,
+    lockState: lockState,
+    config: config
+  };
+  
+  res.json(response);
+});
+
+// ===== ENDPOINT UNTUK FORCE TIMER SYNC =====
+app.get("/synctimer", (req, res) => {
+  const action = req.query.action || 'status';
+  
+  let response = {
+    success: true,
+    message: "Timer status",
+    timer: {
+      isRunning: isTimerRunning,
+      remaining: timeRemaining
+    },
+    lock: lockState
+  };
+  
+  if (action === 'stop') {
+    stopTimer();
+    response.message = "Timer stopped manually";
+  } else if (action === 'reset') {
+    resetTimer();
+    response.message = "Timer reset manually";
+  }
+  
+  console.log(`[SYNCTIMER] ${action} request:`, response);
+  res.json(response);
+});
 
 // ===== ENDPOINT UPDATE DENGAN ATOMIC LOCK OPTIMIZED =====
 app.get("/update", (req, res) => {
@@ -1447,7 +1523,7 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS');
+    console.log('SISTEM KUIS - DENGAN TIMER SYNC');
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);

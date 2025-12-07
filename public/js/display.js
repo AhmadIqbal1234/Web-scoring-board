@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -966,6 +966,7 @@ document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
   console.log('[DISPLAY] Initialized - Responsive Button Version');
   console.log('[OPTIMIZATION] Button cooldown: 10ms, Lock threshold: 3ms');
+  console.log('[SYNC] ESP32 polling server every 1 second for timer sync');
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {

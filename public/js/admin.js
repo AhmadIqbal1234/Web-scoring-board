@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -267,6 +267,7 @@ function initializeESP32Controls() {
   const refreshBtn = document.getElementById("refreshESP32");
   const testBtn = document.getElementById("testESP32");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
+  const syncBtn = document.getElementById("manualSync");
   
   if (refreshBtn) {
     refreshBtn.addEventListener("click", refreshESP32Status);
@@ -278,6 +279,10 @@ function initializeESP32Controls() {
 
   if (forceUnlockBtn) {
     forceUnlockBtn.addEventListener("click", forceUnlockAll);
+  }
+
+  if (syncBtn) {
+    syncBtn.addEventListener("click", manualSyncWithESP32);
   }
   
   startESP32RealTimePolling();
@@ -312,7 +317,7 @@ function forceUnlockAll() {
       return r.json();
     })
     .then(data => {
-      showNotification("✅ Semua kunci berhasil dibuka paksa!", "success");
+      showNotification("Semua kunci berhasil dibuka paksa!", "success");
       
       lockState = { locked: false, activeTeam: null };
       updateTimerStatus('TIDAK AKTIF', 0);
@@ -339,6 +344,58 @@ function forceUnlockAll() {
       setTimeout(() => {
         btn.disabled = false;
         btn.textContent = originalText;
+      }, 1000);
+    });
+}
+
+// ===== MANUAL SYNC =====
+function manualSyncWithESP32() {
+  const btn = document.getElementById("manualSync");
+  const originalText = btn.textContent;
+  
+  btn.disabled = true;
+  btn.textContent = 'SYNCING...';
+  btn.classList.add('loading');
+  
+  fetch('/synctimer?action=status')
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      showNotification("Sync berhasil", "success");
+      
+      // Update UI berdasarkan data dari server
+      const timerStateEl = document.getElementById("timerState");
+      const currentTimeEl = document.getElementById("currentTime");
+      
+      if (timerStateEl && currentTimeEl) {
+        if (data.timer.isRunning) {
+          timerStateEl.textContent = 'BERJALAN';
+          const mins = Math.floor(data.timer.remaining / 60);
+          const secs = data.timer.remaining % 60;
+          currentTimeEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        } else {
+          timerStateEl.textContent = 'TIDAK AKTIF';
+          currentTimeEl.textContent = '00:00';
+        }
+      }
+      
+      // Update lock state
+      if (data.lock.locked && data.lock.activeTeam) {
+        lockState = data.lock;
+        updateLockStateUI();
+      }
+    })
+    .catch(err => {
+      showNotification("❌ Sync gagal", "error");
+      console.error('Sync error:', err);
+    })
+    .finally(() => {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = originalText;
+        btn.classList.remove('loading');
       }, 1000);
     });
 }
@@ -404,11 +461,11 @@ function testESP32Connection() {
         
         if (data.sukses) {
           resultDiv.innerHTML = `
-            <strong>✅ TEST BERHASIL</strong><br>
+            <strong>TEST BERHASIL</strong><br>
             <small>${data.pesan}</small><br>
             <small>${data.detail.sejakAktivitasTerakhir} sejak aktivitas terakhir</small>
           `;
-          showNotification("✅ ESP32 ONLINE", "success");
+          showNotification("ESP32 ONLINE", "success");
           
           updateESP32Status({
             connected: true,
@@ -417,11 +474,11 @@ function testESP32Connection() {
           });
         } else {
           resultDiv.innerHTML = `
-            <strong>❌ TEST GAGAL</strong><br>
+            <strong>TEST GAGAL</strong><br>
             <small>${data.pesan}</small><br>
             <small>${data.saran || ''}</small>
           `;
-          showNotification("❌ ESP32 OFFLINE", "error");
+          showNotification("ESP32 OFFLINE", "error");
         }
         
         setTimeout(() => {
@@ -431,7 +488,7 @@ function testESP32Connection() {
     })
     .catch(err => {
       adminLogger.error('Connection test failed:', err);
-      showNotification("❌ Test gagal", "error");
+      showNotification("Test gagal", "error");
     })
     .finally(() => {
       setTimeout(() => {
@@ -670,7 +727,7 @@ socket.on("disconnect", () => {
 });
 
 socket.on("esp32Status", (status) => {
-  console.log("✅ ESP32 Status received:", {
+  console.log("ESP32 Status received:", {
     connected: status.connected,
     lastActivity: status.lastActivity,
     heartbeatCount: status.heartbeatCount
@@ -950,6 +1007,37 @@ socket.on("systemUnlocked", (data) => {
   }
 });
 
+// ===== UPDATE LOCK STATE UI =====
+function updateLockStateUI() {
+  const unlockBtn = document.getElementById("unlock");
+  const juryControls = document.getElementById("juryControls");
+  const waitingLabel = document.getElementById("waitingLabel");
+  const activeTeamLabel = document.getElementById("activeTeamLabel");
+  
+  if (lockState.locked && lockState.activeTeam) {
+    if (unlockBtn) {
+      unlockBtn.textContent = `Buka Kunci (Tim ${getTeamLetter(lockState.activeTeam)} Aktif)`;
+      unlockBtn.disabled = false;
+    }
+    
+    if (juryControls) juryControls.style.display = "flex";
+    if (waitingLabel) waitingLabel.style.display = "none";
+    if (activeTeamLabel) {
+      activeTeamLabel.textContent = `Tim ${getTeamLetter(lockState.activeTeam)} Sedang Aktif`;
+      activeTeamLabel.style.display = "block";
+    }
+  } else {
+    if (unlockBtn) {
+      unlockBtn.textContent = "Buka Kunci Tombol";
+      unlockBtn.disabled = true;
+    }
+    
+    if (juryControls) juryControls.style.display = "none";
+    if (waitingLabel) waitingLabel.style.display = "block";
+    if (activeTeamLabel) activeTeamLabel.style.display = "none";
+  }
+}
+
 // ===== INITIALIZE =====
 function initializeAdmin() {
   createTeamControls();
@@ -1018,5 +1106,6 @@ function initializeAdmin() {
 document.addEventListener('DOMContentLoaded', function() {
   adminLogger.info('Admin panel initializing...');
   console.log('[OPTIMIZATION] Responsive button system enabled');
+  console.log('[SYNC] Manual sync button added');
   initializeAdmin();
 });
