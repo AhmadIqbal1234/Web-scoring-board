@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -106,7 +106,6 @@ function updateESP32Status(status) {
   
   updateESP32Timestamp();
   
-  // Log status perubahan
   if (sebelumnyaOnline !== esp32Status.connected) {
     const pesan = esp32Status.connected ? 
       `ESP32 terhubung! (${esp32Status.modulesDetected} modul, ${esp32Status.activeTeams} tim)` : 
@@ -146,7 +145,6 @@ function updateESP32Timestamp() {
         timestampElement.style.color = "#f44336";
       }
       
-      // Auto-refresh jika mendekati timeout
       if (timeDiff > 240 && timeDiff < 300) {
         if (!document.hidden) {
           refreshESP32Status();
@@ -158,44 +156,48 @@ function updateESP32Timestamp() {
 
 // ===== TOGGLE TEAM =====
 function toggleTeamStatus(teamNumber) {
-  teamStatus[teamNumber - 1] = !teamStatus[teamNumber - 1];
+  const newStatus = !teamStatus[teamNumber - 1];
   
-  const teamCard = document.querySelector(`.team-card[data-team="${teamNumber}"]`);
-  const toggleBtn = document.getElementById(`toggle-${teamNumber}`);
-  const badgeEl = document.getElementById(`badge-${teamNumber}`);
+  console.log(`[ADMIN] Toggle team ${teamNumber} to ${newStatus ? 'enabled' : 'disabled'}`);
   
-  if (teamCard && toggleBtn && badgeEl) {
-    if (teamStatus[teamNumber - 1]) {
-      teamCard.classList.remove('team-disabled');
-      toggleBtn.textContent = 'NONAKTIFKAN';
-      toggleBtn.classList.remove('toggle-off');
-      toggleBtn.classList.add('toggle-on');
-      badgeEl.textContent = "MENUNGGU";
-      badgeEl.className = "team-status status-waiting";
-    } else {
-      teamCard.classList.add('team-disabled');
-      toggleBtn.textContent = 'AKTIFKAN';
-      toggleBtn.classList.remove('toggle-on');
-      toggleBtn.classList.add('toggle-off');
-      badgeEl.textContent = "NONAKTIF";
-      badgeEl.className = "team-status status-disabled";
-    }
-  }
-  
-  fetch(`/toggleTeam?team=${teamNumber}&enabled=${teamStatus[teamNumber - 1]}`)
+  fetch(`/toggleTeam?team=${teamNumber}&enabled=${newStatus}`)
     .then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     })
     .then(data => {
-      adminLogger.info(`Tim ${getTeamLetter(teamNumber)} toggle updated`);
+      // Update local state only after successful server response
+      teamStatus[teamNumber - 1] = newStatus;
+      
+      const teamCard = document.querySelector(`.team-card[data-team="${teamNumber}"]`);
+      const toggleBtn = document.getElementById(`toggle-${teamNumber}`);
+      const badgeEl = document.getElementById(`badge-${teamNumber}`);
+      
+      if (teamCard && toggleBtn && badgeEl) {
+        if (newStatus) {
+          teamCard.classList.remove('team-disabled');
+          toggleBtn.textContent = 'NONAKTIFKAN';
+          toggleBtn.classList.remove('toggle-off');
+          toggleBtn.classList.add('toggle-on');
+          badgeEl.textContent = "MENUNGGU";
+          badgeEl.className = "team-status status-waiting";
+        } else {
+          teamCard.classList.add('team-disabled');
+          toggleBtn.textContent = 'AKTIFKAN';
+          toggleBtn.classList.remove('toggle-on');
+          toggleBtn.classList.add('toggle-off');
+          badgeEl.textContent = "NONAKTIF";
+          badgeEl.className = "team-status status-disabled";
+        }
+      }
+      
+      adminLogger.info(`Tim ${getTeamLetter(teamNumber)} toggle updated to ${newStatus ? 'enabled' : 'disabled'}`);
+      showNotification(`Tim ${getTeamLetter(teamNumber)} ${newStatus ? 'diaktifkan' : 'dinonaktifkan'}`, "info");
     })
     .catch(err => {
       adminLogger.error('Toggle update failed:', err);
-      teamStatus[teamNumber - 1] = !teamStatus[teamNumber - 1];
+      showNotification("Gagal memperbarui status tim!", "error");
     });
-  
-  showNotification(`Tim ${getTeamLetter(teamNumber)} ${teamStatus[teamNumber - 1] ? 'diaktifkan' : 'dinonaktifkan'}`, "info");
 }
 
 // ===== CREATE TEAM CONTROLS =====
@@ -280,7 +282,6 @@ function initializeESP32Controls() {
   
   startESP32RealTimePolling();
   
-  // Auto-refresh saat tab aktif
   document.addEventListener('visibilitychange', function() {
     if (!document.hidden) {
       adminLogger.esp32('Tab aktif, refresh status');
@@ -289,7 +290,6 @@ function initializeESP32Controls() {
     }
   });
   
-  // Tambah event listener untuk window focus
   window.addEventListener('focus', function() {
     adminLogger.esp32('Window focused, refresh status');
     refreshESP32Status();
@@ -314,7 +314,6 @@ function forceUnlockAll() {
     .then(data => {
       showNotification("✅ Semua kunci berhasil dibuka paksa!", "success");
       
-      // Update UI state
       lockState = { locked: false, activeTeam: null };
       updateTimerStatus('TIDAK AKTIF', 0);
       
@@ -345,7 +344,6 @@ function forceUnlockAll() {
 }
 
 function startESP32RealTimePolling() {
-  // Polling lebih sering untuk real-time updates
   setInterval(() => {
     socket.emit("getESP32Status");
     
@@ -357,7 +355,7 @@ function startESP32RealTimePolling() {
       .catch(err => {
         console.error('ESP32 polling error:', err);
       });
-  }, 3000); // 3 detik untuk real-time
+  }, 3000);
   
   setInterval(updateESP32Timestamp, 1000);
 }
@@ -412,7 +410,6 @@ function testESP32Connection() {
           `;
           showNotification("✅ ESP32 ONLINE", "success");
           
-          // Update status dari response
           updateESP32Status({
             connected: true,
             lastActivity: data.detail.aktivitasTerakhir,
@@ -633,7 +630,6 @@ function handleJuryMinus() {
 
 // ===== HIGH-SPEED NOTIFICATION =====
 function showNotification(message, type = "success") {
-  // Gunakan requestAnimationFrame untuk rendering cepat
   requestAnimationFrame(() => {
     const existingNotification = document.querySelector('.admin-notification');
     if (existingNotification) {
@@ -646,10 +642,8 @@ function showNotification(message, type = "success") {
     
     document.body.appendChild(notification);
     
-    // Animasi masuk cepat
     setTimeout(() => notification.classList.add('show'), 10);
     
-    // Auto remove cepat
     setTimeout(() => {
       notification.classList.remove('show');
       setTimeout(() => notification.remove(), 300);
@@ -663,7 +657,6 @@ socket.on("connect", () => {
   const statusDot = document.querySelector('.status-dot');
   if (statusDot) statusDot.style.background = '#4caf50';
   
-  // Request status ESP32 saat connect
   setTimeout(() => {
     socket.emit("getESP32Status");
     refreshESP32Status();
@@ -807,24 +800,85 @@ socket.on("reset", (scores) => {
   }
 });
 
+// PERBAIKAN: Event handler untuk sync toggle state
 socket.on("teamToggleUpdate", (data) => {
   const { team, enabled } = data;
+  console.log(`[ADMIN] Team toggle update from server: Team ${team} = ${enabled}`);
+  
   if (team >= 1 && team <= TEAM_COUNT) {
     teamStatus[team - 1] = enabled;
+    
+    // Update UI
+    const teamCard = document.querySelector(`.team-card[data-team="${team}"]`);
+    const toggleBtn = document.getElementById(`toggle-${team}`);
+    const badgeEl = document.getElementById(`badge-${team}`);
+    
+    if (teamCard && toggleBtn && badgeEl) {
+      if (enabled) {
+        teamCard.classList.remove('team-disabled');
+        toggleBtn.textContent = 'NONAKTIFKAN';
+        toggleBtn.classList.remove('toggle-off');
+        toggleBtn.classList.add('toggle-on');
+        badgeEl.textContent = "MENUNGGU";
+        badgeEl.className = "team-status status-waiting";
+      } else {
+        teamCard.classList.add('team-disabled');
+        toggleBtn.textContent = 'AKTIFKAN';
+        toggleBtn.classList.remove('toggle-on');
+        toggleBtn.classList.add('toggle-off');
+        badgeEl.textContent = "NONAKTIF";
+        badgeEl.className = "team-status status-disabled";
+      }
+    }
   }
 });
 
 socket.on("allTeamsEnabled", () => {
+  console.log('[ADMIN] All teams enabled from server');
   teamStatus = Array(TEAM_COUNT).fill(true);
+  
+  // Update all UI
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
+    const toggleBtn = document.getElementById(`toggle-${i}`);
+    const badgeEl = document.getElementById(`badge-${i}`);
+    
+    if (teamCard && toggleBtn && badgeEl) {
+      teamCard.classList.remove('team-disabled');
+      toggleBtn.textContent = 'NONAKTIFKAN';
+      toggleBtn.classList.remove('toggle-off');
+      toggleBtn.classList.add('toggle-on');
+      badgeEl.textContent = "MENUNGGU";
+      badgeEl.className = "team-status status-waiting";
+    }
+  }
 });
 
 socket.on("allTeamsDisabled", () => {
+  console.log('[ADMIN] All teams disabled from server');
   teamStatus = Array(TEAM_COUNT).fill(false);
+  
+  // Update all UI
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
+    const toggleBtn = document.getElementById(`toggle-${i}`);
+    const badgeEl = document.getElementById(`badge-${i}`);
+    
+    if (teamCard && toggleBtn && badgeEl) {
+      teamCard.classList.add('team-disabled');
+      toggleBtn.textContent = 'AKTIFKAN';
+      toggleBtn.classList.remove('toggle-on');
+      toggleBtn.classList.add('toggle-off');
+      badgeEl.textContent = "NONAKTIF";
+      badgeEl.className = "team-status status-disabled";
+    }
+  }
 });
 
 socket.on("teamToggleState", (data) => {
+  console.log('[ADMIN] Initial team toggle state from server:', data);
   if (Array.isArray(data)) {
-    teamStatus = data;
+    teamStatus = [...data];
   }
 });
 
@@ -917,6 +971,7 @@ function initializeAdmin() {
     
     if (Array.isArray(toggleStateData)) {
       teamStatus = toggleStateData;
+      console.log('[ADMIN] Initial team status:', teamStatus);
     }
     
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -926,6 +981,7 @@ function initializeAdmin() {
       }
     }
     
+    // Update UI berdasarkan initial state
     for (let i = 1; i <= TEAM_COUNT; i++) {
       const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
       const toggleBtn = document.getElementById(`toggle-${i}`);

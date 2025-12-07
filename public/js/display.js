@@ -1,9 +1,8 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
-let teamToggleState = Array(TEAM_COUNT).fill(true);
 
 // ===== ATOMIC LOCK STATE =====
 let atomicLockState = {
@@ -14,15 +13,19 @@ let atomicLockState = {
   lockId: null
 };
 
+// ===== TEAM TOGGLE STATE MANAGEMENT =====
+let teamToggleState = Array(TEAM_COUNT).fill(true); // Status dari server
+let lastServerToggleState = Array(TEAM_COUNT).fill(true); // Untuk validasi
+
 // ===== PERFORMANCE OPTIMIZATION =====
-const BUTTON_COOLDOWN = 10; // DITURUNKAN: 50ms → 10ms
+const BUTTON_COOLDOWN = 10;
 let lastButtonProcessTime = 0;
 let currentActiveTeam = 0;
 
 // Timer optimization
 let lastTimerValue = 0;
 let timerUpdateTimeout = null;
-const TIMER_UPDATE_DEBOUNCE = 30; // DITURUNKAN: 50ms → 30ms
+const TIMER_UPDATE_DEBOUNCE = 30;
 
 // ===== SISTEM AUDIO FILE =====
 class SistemAudioTim {
@@ -308,26 +311,21 @@ function getTeamAudioFile(teamNumber) {
 // ===== ATOMIC LOCK FUNCTIONS - OPTIMIZED =====
 function checkAtomicLock(team) {
   const now = Date.now();
-  const lockThreshold = 3; // Threshold 3ms untuk responsivitas maksimal
+  const lockThreshold = 3;
   
   if (atomicLockState.locked) {
     const lockAge = now - atomicLockState.lockTime;
     
-    // Jika lock sangat baru (dalam threshold), langsung tolak
     if (lockAge < lockThreshold) {
       console.log(`[ATOMIC] Tim ${getTeamLetter(team)} ditolak - lock terlalu baru (${lockAge}ms)`);
       return false;
     }
     
-    // Jika sudah terkunci oleh tim lain
     if (atomicLockState.activeTeam !== team) {
-      console.log(`[ATOMIC] Tim ${getTeamLetter(team)} ditolak - ` +
-                 `sistem terkunci oleh Tim ${getTeamLetter(atomicLockState.activeTeam)} ` +
-                 `(${lockAge}ms yang lalu)`);
+      console.log(`[ATOMIC] Tim ${getTeamLetter(team)} ditolak - sistem terkunci oleh Tim ${getTeamLetter(atomicLockState.activeTeam)} (${lockAge}ms yang lalu)`);
       return false;
     }
     
-    // Jika terkunci oleh tim yang sama tapi baru saja
     if (lockAge < 100) {
       console.log(`[ATOMIC] Duplikat buzz dari Tim ${getTeamLetter(team)} diabaikan`);
       return false;
@@ -396,19 +394,38 @@ function resetDisplay() {
   overlay.classList.remove("active");
 }
 
-// Update tampilan berdasarkan status toggle tim
+// ===== UPDATE TAMPILAN TIM BERDASARKAN STATUS TOGGLE =====
 function updateTeamDisplay() {
+  console.log('[TOGGLE] Updating team display:', teamToggleState);
+  
   for (let i = 1; i <= TEAM_COUNT; i++) {
     const el = document.getElementById("team-" + i);
     if (el) {
       if (teamToggleState[i - 1]) {
+        // Tim diaktifkan
         el.style.display = "flex";
         el.style.opacity = "1";
+        el.style.visibility = "visible";
+        el.style.pointerEvents = "auto";
+        el.classList.remove("team-disabled");
+        el.classList.remove("hidden");
       } else {
+        // Tim dinonaktifkan
         el.style.display = "none";
         el.style.opacity = "0";
+        el.style.visibility = "hidden";
+        el.style.pointerEvents = "none";
+        el.classList.add("team-disabled");
       }
     }
+  }
+  
+  // Update atribut data untuk CSS grid responsive
+  const grid = document.querySelector('.grid');
+  if (grid) {
+    const visibleCount = teamToggleState.filter(state => state).length;
+    grid.setAttribute('data-visible-teams', visibleCount);
+    console.log(`[TOGGLE] Visible teams: ${visibleCount}`);
   }
 }
 
@@ -426,7 +443,6 @@ function updateTimerDisplayOptimized(seconds) {
       timerEl.classList.add('inactive');
       lastTimerValue = 0;
       
-      // Saat timer 0, reset display juga
       if (!atomicLockState.locked) {
         resetDisplay();
       }
@@ -547,10 +563,12 @@ function loadInitialData() {
       }
     }
     
-    // Update toggle state
+    // PERBAIKAN: Update toggle state dengan benar
     if (Array.isArray(toggleStateData)) {
-      teamToggleState = toggleStateData;
-      updateTeamDisplay();
+      teamToggleState = [...toggleStateData];
+      lastServerToggleState = [...toggleStateData];
+      updateTeamDisplay(); // PASTIKAN ini dipanggil
+      console.log('[INIT] Team toggle state loaded:', teamToggleState);
     }
     
     // Sync timer
@@ -589,6 +607,12 @@ socket.on("buzz", ({ team }) => {
   
   lastButtonProcessTime = now;
   
+  // Check if team is enabled
+  if (!teamToggleState[team - 1]) {
+    console.log(`[BUZZ] Team ${getTeamLetter(team)} is disabled, ignoring buzz`);
+    return;
+  }
+  
   // Atomic lock check dengan threshold 3ms
   if (!checkAtomicLock(team)) {
     console.log(`[BUZZ] Atomic lock check failed for Team ${getTeamLetter(team)}`);
@@ -617,6 +641,52 @@ socket.on("buzz", ({ team }) => {
     }
   } else {
     console.log(`[BUZZ] Team ${getTeamLetter(team)} is disabled`);
+  }
+});
+
+// ===== EVENT HANDLER UNTUK TOGGLE TIM =====
+socket.on("teamToggleUpdate", data => {
+  const { team, enabled } = data;
+  
+  console.log(`[TOGGLE] Server update: Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`, data);
+  
+  if (team >= 1 && team <= TEAM_COUNT) {
+    // Simpan status dari server
+    teamToggleState[team - 1] = enabled;
+    lastServerToggleState[team - 1] = enabled;
+    
+    // Update tampilan
+    updateTeamDisplay();
+    
+    // Log untuk debug
+    console.log(`[TOGGLE] Current toggle state for Team ${getTeamLetter(team)}: ${teamToggleState[team - 1]}`);
+    console.log(`[TOGGLE] Full toggle state:`, teamToggleState);
+  }
+});
+
+socket.on("allTeamsEnabled", () => {
+  console.log('[TOGGLE] Server: All teams enabled');
+  teamToggleState = Array(TEAM_COUNT).fill(true);
+  lastServerToggleState = Array(TEAM_COUNT).fill(true);
+  updateTeamDisplay();
+  console.log('[TOGGLE] After all enabled:', teamToggleState);
+});
+
+socket.on("allTeamsDisabled", () => {
+  console.log('[TOGGLE] Server: All teams disabled');
+  teamToggleState = Array(TEAM_COUNT).fill(false);
+  lastServerToggleState = Array(TEAM_COUNT).fill(false);
+  updateTeamDisplay();
+  console.log('[TOGGLE] After all disabled:', teamToggleState);
+});
+
+socket.on("teamToggleState", data => {
+  console.log('[TOGGLE] Initial toggle state from server:', data);
+  if (Array.isArray(data)) {
+    teamToggleState = [...data];
+    lastServerToggleState = [...data];
+    updateTeamDisplay();
+    console.log('[TOGGLE] After initial load:', teamToggleState);
   }
 });
 
@@ -680,7 +750,6 @@ socket.on("reset", arr => {
 
 // ===== ATOMIC LOCKSTATE EVENT =====
 socket.on("lockstate", state => {
-  // Update atomic lock state dari server
   atomicLockState.locked = state.locked || false;
   atomicLockState.activeTeam = state.activeTeam || 0;
   atomicLockState.lockTime = state.lockTime || 0;
@@ -694,40 +763,6 @@ socket.on("lockstate", state => {
   } else if (state.activeTeam) {
     showActiveTeam(state.activeTeam);
     setAtomicLock(state.activeTeam);
-  }
-});
-
-// Event untuk update status toggle tim
-socket.on("teamToggleUpdate", data => {
-  const { team, enabled } = data;
-  
-  console.log(`[TOGGLE] Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`);
-  
-  if (team >= 1 && team <= TEAM_COUNT) {
-    teamToggleState[team - 1] = enabled;
-    updateTeamDisplay();
-  }
-});
-
-// Event untuk enable semua tim
-socket.on("allTeamsEnabled", () => {
-  console.log('[TOGGLE] All teams enabled');
-  teamToggleState = Array(TEAM_COUNT).fill(true);
-  updateTeamDisplay();
-});
-
-// Event untuk disable semua tim
-socket.on("allTeamsDisabled", () => {
-  console.log('[TOGGLE] All teams disabled');
-  teamToggleState = Array(TEAM_COUNT).fill(false);
-  updateTeamDisplay();
-});
-
-// Event untuk initial team toggle state
-socket.on("teamToggleState", data => {
-  if (Array.isArray(data)) {
-    teamToggleState = data;
-    updateTeamDisplay();
   }
 });
 
@@ -839,7 +874,6 @@ socket.on("timerReset", () => {
   
   timerUpdateTimeout = setTimeout(() => {
     resetTimerDisplay();
-    // Selalu reset display saat timer direset
     resetDisplay();
     clearAtomicLock();
   }, TIMER_UPDATE_DEBOUNCE);
@@ -849,12 +883,10 @@ socket.on("timerReset", () => {
 socket.on("systemUnlocked", (data) => {
   console.log(`[SYSTEM] System unlocked: ${data.reason}`);
   
-  // Reset semua state lokal
   clearAtomicLock();
   resetDisplay();
   resetTimerDisplay();
   
-  // Update UI
   const timerEl = document.querySelector('.timer');
   if (timerEl) {
     timerEl.textContent = '00:00';
@@ -862,10 +894,8 @@ socket.on("systemUnlocked", (data) => {
     timerEl.classList.add('inactive');
   }
   
-  // Reset active team
   currentActiveTeam = 0;
   
-  // Log untuk debugging
   console.log(`[SYSTEM] Display reset completed for reason: ${data.reason}`);
 });
 
@@ -902,7 +932,6 @@ socket.on("autoPenaltyStatus", (data) => {
 socket.on("esp32Status", (status) => {
   console.log(`[ESP32] Status: ${status.connected ? 'CONNECTED' : 'DISCONNECTED'}`);
   
-  // Update indikator di halaman utama jika ada
   const esp32Indicator = document.querySelector('.esp32-indicator');
   if (esp32Indicator) {
     if (status.connected) {
@@ -920,6 +949,18 @@ function checkTimerStatus() {
   socket.emit("getTimerStatus");
 }
 
+// ===== DEBUG FUNCTIONS =====
+function debugToggleState() {
+  console.log('=== DEBUG TOGGLE STATE ===');
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const el = document.getElementById("team-" + i);
+    console.log(`Team ${getTeamLetter(i)}: ${teamToggleState[i-1] ? 'Enabled' : 'Disabled'}`);
+    console.log(`  Element display: ${el ? el.style.display : 'No element'}`);
+    console.log(`  Element visibility: ${el ? el.style.visibility : 'No element'}`);
+  }
+  console.log('==========================');
+}
+
 // ===== INITIALIZE =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
@@ -935,9 +976,11 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(() => {
       if (atomicLockState.locked) {
         const lockAge = Date.now() - atomicLockState.lockTime;
-        console.log(`[DEBUG] Atomic Lock: Team ${getTeamLetter(atomicLockState.activeTeam)} ` +
-                   `(locked ${lockAge}ms ago, ID: ${atomicLockState.lockId})`);
+        console.log(`[DEBUG] Atomic Lock: Team ${getTeamLetter(atomicLockState.activeTeam)} (locked ${lockAge}ms ago, ID: ${atomicLockState.lockId})`);
       }
+      
+      // Log toggle state jika perlu debug
+      debugToggleState();
     }, 5000);
   }
   
