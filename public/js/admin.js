@@ -1,4 +1,4 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -58,6 +58,8 @@ function updateESP32Status(status) {
   const esp32Heap = document.getElementById("esp32Heap");
   const esp32RSSI = document.getElementById("esp32RSSI");
   const esp32Uptime = document.getElementById("esp32Uptime");
+  const esp32Modules = document.getElementById("esp32Modules");
+  const esp32ActiveTeams = document.getElementById("esp32ActiveTeams");
   
   const sebelumnyaOnline = esp32Status.connected;
   
@@ -115,55 +117,95 @@ function updateESP32Status(status) {
   }
   
   // PERBAIKAN: Update informasi suhu dan monitoring
-  if (esp32Temperature && esp32Status.temperature !== null) {
-    esp32Temperature.textContent = `${esp32Status.temperature.toFixed(1)}°C`;
-    
-    // Warna berdasarkan suhu
-    if (esp32Status.temperature > 70) {
-      esp32Temperature.style.color = "#ff4444";
-      esp32Temperature.style.fontWeight = "bold";
-      esp32Temperature.classList.add("temperature-warning");
-    } else if (esp32Status.temperature > 60) {
-      esp32Temperature.style.color = "#ff9800";
-      esp32Temperature.classList.remove("temperature-warning");
+  if (esp32Temperature) {
+    if (esp32Status.temperature !== null && esp32Status.temperature !== undefined) {
+      esp32Temperature.textContent = `${esp32Status.temperature.toFixed(1)}°C`;
+      
+      // Warna berdasarkan suhu
+      if (esp32Status.temperature > 70) {
+        esp32Temperature.style.color = "#ff4444";
+        esp32Temperature.style.fontWeight = "bold";
+        esp32Temperature.classList.add("temperature-warning");
+      } else if (esp32Status.temperature > 60) {
+        esp32Temperature.style.color = "#ff9800";
+        esp32Temperature.classList.remove("temperature-warning");
+      } else {
+        esp32Temperature.style.color = "#4caf50";
+        esp32Temperature.classList.remove("temperature-warning");
+      }
     } else {
-      esp32Temperature.style.color = "#4caf50";
-      esp32Temperature.classList.remove("temperature-warning");
+      esp32Temperature.textContent = "-";
+      esp32Temperature.style.color = "#888";
     }
   }
   
-  if (esp32Heap && esp32Status.freeHeap) {
-    esp32Heap.textContent = `${Math.round(esp32Status.freeHeap / 1024)} KB`;
-    if (esp32Status.freeHeap < 10000) {
-      esp32Heap.style.color = "#ff9800";
+  if (esp32Heap) {
+    if (esp32Status.freeHeap) {
+      esp32Heap.textContent = `${Math.round(esp32Status.freeHeap / 1024)} KB`;
+      if (esp32Status.freeHeap < 10000) {
+        esp32Heap.style.color = "#ff9800";
+      } else {
+        esp32Heap.style.color = "#4caf50";
+      }
     } else {
-      esp32Heap.style.color = "#4caf50";
+      esp32Heap.textContent = "-";
+      esp32Heap.style.color = "#888";
     }
   }
   
-  if (esp32RSSI && esp32Status.wifiRSSI) {
-    esp32RSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
-    if (esp32Status.wifiRSSI > -50) {
-      esp32RSSI.style.color = "#4caf50";
-    } else if (esp32Status.wifiRSSI > -70) {
-      esp32RSSI.style.color = "#ff9800";
+  if (esp32RSSI) {
+    if (esp32Status.wifiRSSI) {
+      esp32RSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
+      if (esp32Status.wifiRSSI > -50) {
+        esp32RSSI.style.color = "#4caf50";
+      } else if (esp32Status.wifiRSSI > -70) {
+        esp32RSSI.style.color = "#ff9800";
+      } else {
+        esp32RSSI.style.color = "#f44336";
+      }
     } else {
-      esp32RSSI.style.color = "#f44336";
+      esp32RSSI.textContent = "-";
+      esp32RSSI.style.color = "#888";
     }
   }
   
-  if (esp32Uptime && esp32Status.uptime) {
-    const hours = Math.floor(esp32Status.uptime / 3600);
-    const minutes = Math.floor((esp32Status.uptime % 3600) / 60);
-    const seconds = esp32Status.uptime % 60;
-    esp32Uptime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    
-    if (esp32Status.uptime > 3600) {
-      esp32Uptime.style.color = "#4caf50";
-    } else if (esp32Status.uptime > 1800) {
-      esp32Uptime.style.color = "#ff9800";
+  if (esp32Uptime) {
+    if (esp32Status.uptime) {
+      const hours = Math.floor(esp32Status.uptime / 3600);
+      const minutes = Math.floor((esp32Status.uptime % 3600) / 60);
+      const seconds = esp32Status.uptime % 60;
+      esp32Uptime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      
+      if (esp32Status.uptime > 3600) {
+        esp32Uptime.style.color = "#4caf50";
+      } else if (esp32Status.uptime > 1800) {
+        esp32Uptime.style.color = "#ff9800";
+      } else {
+        esp32Uptime.style.color = "#f44336";
+      }
     } else {
-      esp32Uptime.style.color = "#f44336";
+      esp32Uptime.textContent = "-";
+      esp32Uptime.style.color = "#888";
+    }
+  }
+  
+  if (esp32Modules) {
+    if (esp32Status.modulesDetected) {
+      esp32Modules.textContent = esp32Status.modulesDetected;
+      esp32Modules.style.color = "#4caf50";
+    } else {
+      esp32Modules.textContent = "-";
+      esp32Modules.style.color = "#888";
+    }
+  }
+  
+  if (esp32ActiveTeams) {
+    if (esp32Status.activeTeams) {
+      esp32ActiveTeams.textContent = esp32Status.activeTeams;
+      esp32ActiveTeams.style.color = "#4caf50";
+    } else {
+      esp32ActiveTeams.textContent = "-";
+      esp32ActiveTeams.style.color = "#888";
     }
   }
   
@@ -364,6 +406,39 @@ function initializeESP32Controls() {
   });
 }
 
+// ===== PERBAIKAN: START ESP32 POLLING =====
+function startESP32RealTimePolling() {
+  // Polling lebih cepat untuk data monitoring (5 detik)
+  setInterval(() => {
+    socket.emit("getESP32Status");
+    
+    // PERBAIKAN: Panggil endpoint monitoring secara eksplisit
+    fetch('/esp32status')
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        // Update status dengan data yang diterima
+        updateESP32Status({
+          lastActivity: new Date(),
+          temperature: data.received?.temperature,
+          freeHeap: data.received?.heap,
+          wifiRSSI: data.received?.rssi,
+          uptime: data.received?.uptime,
+          modulesDetected: data.received?.modules,
+          activeTeams: data.received?.activeTeams
+        });
+      })
+      .catch(err => {
+        console.error('ESP32 polling error:', err);
+      });
+  }, 5000); // PERBAIKAN: Dipercepat dari 3000ms ke 5000ms
+  
+  // Update timestamp setiap detik
+  setInterval(updateESP32Timestamp, 1000);
+}
+
 // ===== PERBAIKAN: START TEMPERATURE MONITORING =====
 function startTemperatureMonitoring() {
   setInterval(() => {
@@ -477,38 +552,24 @@ function manualSyncWithESP32() {
     });
 }
 
-function startESP32RealTimePolling() {
-  setInterval(() => {
-    socket.emit("getESP32Status");
-    
-    fetch('/esp32status')
-      .then(r => r.json())
-      .then(data => {
-        updateESP32Status(data);
-      })
-      .catch(err => {
-        console.error('ESP32 polling error:', err);
-      });
-  }, 3000);
-  
-  setInterval(updateESP32Timestamp, 1000);
-}
-
 function refreshESP32Status() {
   adminLogger.esp32('Manual refresh requested');
   
-  fetch('/esp32status')
+  fetch('/debug/esp32')
     .then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     })
     .then(data => {
       updateESP32Status(data);
-      adminLogger.esp32('Status refreshed', {
+      adminLogger.esp32('Status refreshed from debug endpoint', {
         connected: data.terhubung,
         lastActivity: data.aktivitasTerakhir,
         heartbeatCount: data.heartbeatCount,
-        temperature: data.suhu
+        temperature: data.suhu,
+        heap: data.memoriBebas,
+        rssi: data.sinyalWiFi,
+        uptime: data.uptime
       });
     })
     .catch(err => {
@@ -542,7 +603,8 @@ function testESP32Connection() {
             <strong>TEST BERHASIL</strong><br>
             <small>${data.pesan}</small><br>
             <small>Suhu: ${data.detail.suhu || 'N/A'}</small><br>
-            <small>Memori: ${data.detail.memoriBebas || 'N/A'}</small>
+            <small>Memori: ${data.detail.memoriBebas || 'N/A'}</small><br>
+            <small>WiFi: ${data.detail.sinyalWiFi || 'N/A'}</small>
           `;
           showNotification("ESP32 ONLINE", "success");
           
@@ -551,7 +613,11 @@ function testESP32Connection() {
             lastActivity: data.detail.aktivitasTerakhir,
             ip: data.detail.ip,
             temperature: data.detail.suhu,
-            freeHeap: data.detail.memoriBebas
+            freeHeap: data.detail.memoriBebas,
+            wifiRSSI: data.detail.sinyalWiFi,
+            uptime: data.detail.uptime,
+            modulesDetected: data.detail.modulTerdeteksi,
+            activeTeams: data.detail.timAktif
           });
         } else {
           resultDiv.innerHTML = `
@@ -808,11 +874,16 @@ socket.on("disconnect", () => {
 });
 
 socket.on("esp32Status", (status) => {
-  console.log("ESP32 Status received:", {
+  console.log("ESP32 Status received via Socket.IO:", {
     connected: status.connected,
     lastActivity: status.lastActivity,
     heartbeatCount: status.heartbeatCount,
-    temperature: status.temperature
+    temperature: status.temperature,
+    freeHeap: status.freeHeap,
+    wifiRSSI: status.wifiRSSI,
+    uptime: status.uptime,
+    modulesDetected: status.modulesDetected,
+    activeTeams: status.activeTeams
   });
   updateESP32Status(status);
 });
@@ -1133,7 +1204,7 @@ function initializeAdmin() {
   Promise.all([
     fetch('/lockstate').then(r => r.json()),
     fetch('/scores').then(r => r.json()),
-    fetch('/esp32status').then(r => r.json()),
+    fetch('/debug/esp32').then(r => r.json()),
     fetch('/teamToggleState').then(r => r.json())
   ]).then(([lockStateData, scoresData, esp32Data, toggleStateData]) => {
     lockState = lockStateData;
@@ -1185,7 +1256,8 @@ function initializeAdmin() {
 // ===== START =====
 document.addEventListener('DOMContentLoaded', function() {
   adminLogger.info('Admin panel initializing...');
-  console.log('[PERBAIKAN] Anti-idle system enabled');
-  console.log('[PERBAIKAN] Temperature monitoring enabled');
+  console.log('[PERBAIKAN] Monitoring system enabled');
+  console.log('[PERBAIKAN] Polling interval: 5 seconds');
+  console.log('[PERBAIKAN] Temperature monitoring active');
   initializeAdmin();
 });

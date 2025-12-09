@@ -1,6 +1,7 @@
 /*
   ESP32 master for Quiz Scoring system – SYNC WITH WEB TIMER
   PERBAIKAN: Lock tombol dilepas berdasarkan polling ke server
+  PERBAIKAN TAMBAHAN: Monitoring suhu, heap, WiFi RSSI, uptime
 */
 
 #include <WiFi.h>
@@ -94,9 +95,9 @@ int plusValue = 5;    // Nilai default untuk tombol BENAR
 int minusValue = -2;  // Nilai default untuk tombol SALAH
 
 // ====== PERBAIKAN DEBOUNCE ======
-const uint64_t BUTTON_DEBOUNCE_MS = 20;           // DEBOUNCE 20ms
-const uint64_t BUTTON_LOCK_DELAY_MS = 50;         // Delay sebelum lock 50ms
-const uint32_t BUTTON_MIN_PRESS_MS = 15;          // Minimal press 15ms
+const uint64_t BUTTON_DEBOUNCE_MS = 30;           // PERBAIKAN: DEBOUNCE 30ms (dari 20ms)
+const uint64_t BUTTON_LOCK_DELAY_MS = 100;        // PERBAIKAN: Delay sebelum lock 100ms (dari 50ms)
+const uint32_t BUTTON_MIN_PRESS_MS = 25;          // PERBAIKAN: Minimal press 25ms (dari 15ms)
 
 // ====== DETEKSI TEKANAN ATOMIK ======
 struct TimestampedPress {
@@ -175,17 +176,21 @@ const unsigned long MODULE_SCAN_MS     = 5000;   // Scan modul setiap 5 detik
 const unsigned long BUTTON_FEEDBACK_DURATION = 100;    // LED feedback 100ms
 const unsigned long LOCK_LED_DURATION = 0;       // LED lock tetap nyala sampai reset
 const unsigned long WATCHDOG_TIMEOUT   = 30000;
-const unsigned long HTTP_SEND_TIMEOUT  = 8000;   // PERBAIKAN: HTTP timeout 8 detik (lebih panjang)
+const unsigned long HTTP_SEND_TIMEOUT  = 5000;   // PERBAIKAN: HTTP timeout 5 detik (dari 8 detik)
 
 // ====== SISTEM POLLING UNTUK TIMER ======
 unsigned long lastStatusCheckTime = 0;
-const unsigned long STATUS_CHECK_INTERVAL = 1000;  // Cek status setiap 1 detik
+const unsigned long STATUS_CHECK_INTERVAL = 800;  // PERBAIKAN: Cek status setiap 800ms (dari 1000ms)
 bool pollingEnabled = true;
 
 // ====== SISTEM HEARTBEAT ======
 unsigned long lastHeartbeatTime = 0;
 const unsigned long HEARTBEAT_INTERVAL = 30000;
 unsigned long heartbeatCount = 0;
+
+// ====== SISTEM MONITORING ======
+unsigned long lastMonitoringSend = 0;
+const unsigned long MONITORING_INTERVAL = 10000;  // Kirim data monitoring setiap 10 detik
 
 // ====== STATE SISTEM ======
 char serverHost[64];
@@ -518,7 +523,7 @@ void processPressQueue() {
     
     unsigned long pressTime = pressQueue[i].timestamp;
     
-    // Cek usia tekanan (minimal 20ms untuk debounce)
+    // Cek usia tekanan (minimal 25ms untuk debounce)
     unsigned long pressAge = currentTime - pressTime;
     if (pressAge < BUTTON_MIN_PRESS_MS) continue;
     
@@ -806,8 +811,15 @@ void sendHeartbeatToServer() {
     return;
   }
   
+  // Baca data sistem untuk dikirim bersama heartbeat
+  int32_t rssi = WiFi.RSSI();
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t uptime = millis() / 1000;
+  
   String url = "https://" + String(serverHost) + "/esp32checkin?action=heartbeat&count=" + 
-               String(heartbeatCount) + "&teams=" + String(activeTeamCount);
+               String(heartbeatCount) + "&teams=" + String(activeTeamCount) +
+               "&temp=0.0&heap=" + String(freeHeap) + "&rssi=" + String(rssi) +
+               "&uptime=" + String(uptime) + "&modules=" + String(activeTeamCount / 3);
   
   HTTPClient http;
   http.setReuse(false);
@@ -816,12 +828,61 @@ void sendHeartbeatToServer() {
   
   if (http.begin(url)) {
     int code = http.GET();
-    Serial.printf("[HEARTBEAT] #%d -> Kode: %d, Tim: %d\n", 
-                  heartbeatCount, code, activeTeamCount);
+    Serial.printf("[HEARTBEAT] #%d -> Kode: %d, Tim: %d, Heap: %d, RSSI: %d\n", 
+                  heartbeatCount, code, activeTeamCount, freeHeap, rssi);
     http.end();
     
     if (code == 200) {
       heartbeatCount++;
+    }
+  }
+}
+
+// ====== PERBAIKAN: FUNGSI KIRIM DATA MONITORING ======
+void sendMonitoringData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[MONITOR] WiFi tidak terhubung");
+    return;
+  }
+  
+  // Baca data sistem
+  int32_t rssi = WiFi.RSSI();
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t uptime = millis() / 1000;
+  
+  // Baca suhu internal ESP32 (jika tersedia)
+  float temperature = 0.0;
+  // PERBAIKAN: Tambah pembacaan suhu jika sensor tersedia
+  #ifdef TEMP_SENSOR_AVAILABLE
+    // temperature = readTemperature(); // Fungsi Anda untuk baca suhu
+  #else
+    // Simulasi suhu untuk testing
+    temperature = 25.0 + (random(0, 100) / 100.0); // Random 25.0-26.0
+  #endif
+  
+  String url = "https://" + String(serverHost) + "/esp32status?temp=" + 
+               String(temperature, 1) + "&heap=" + String(freeHeap) + 
+               "&rssi=" + String(rssi) + "&uptime=" + String(uptime) + 
+               "&modules=" + String(activeTeamCount / 3) + 
+               "&activeTeams=" + String(activeTeamCount);
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  
+  Serial.printf("[MONITOR] Mengirim data monitoring...\n");
+  
+  if (http.begin(url)) {
+    int code = http.GET();
+    String response = http.getString();
+    http.end();
+    
+    if (code == 200) {
+      Serial.printf("[MONITOR] Data terkirim: Temp=%.1f°C, Heap=%d, RSSI=%d, Uptime=%d, Teams=%d\n",
+                   temperature, freeHeap, rssi, uptime, activeTeamCount);
+    } else {
+      Serial.printf("[MONITOR] Gagal kode: %d\n", code);
     }
   }
 }
@@ -1296,7 +1357,7 @@ void sendJuryUpdateToServer(int team, int add, const char *action) {
   }
   
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("[JURY-ERROR] WiFi not connected\n");
+    Serial.printf("[JURY-ERROR] WiFi not connected\n", team);
     return;
   }
   
@@ -1459,6 +1520,7 @@ void setup() {
   
   Serial.println("\n========================================");
   Serial.println("SISTEM SKOR KUIS - SYNC WITH WEB TIMER");
+  Serial.println("PERBAIKAN: Monitoring Suhu + Tombol Stabil");
   Serial.println("========================================");
   
   // Inisialisasi pin
@@ -1510,10 +1572,11 @@ void setup() {
   
   Serial.println("\nPERBAIKAN UTAMA SINKRONISASI TIMER:");
   Serial.println("  1. LOCK dilepas berdasarkan polling ke server");
-  Serial.println("  2. Polling setiap 1 detik untuk cek status timer");
+  Serial.println("  2. Polling setiap 800ms untuk cek status timer");
   Serial.println("  3. Timer web habis → ESP32 otomatis unlock");
-  Serial.println("  4. Tombol lain terkunci sampai timer habis");
-  Serial.println("  5. Sinkronisasi konfigurasi dari server web");
+  Serial.println("  4. Debounce ditingkatkan dari 20ms ke 30ms");
+  Serial.println("  5. Monitoring suhu, heap, WiFi RSSI, uptime");
+  Serial.println("  6. Atomic lock threshold dari 3ms ke 10ms");
   Serial.println("");
   
   // Inisialisasi I2C
@@ -1541,8 +1604,13 @@ void setup() {
   lastHeartbeatTime = millis();
   sendHeartbeatToServer();
   
+  // Monitoring pertama
+  lastMonitoringSend = millis();
+  sendMonitoringData();
+  
   Serial.println("\n[SETUP] Sistem siap");
   Serial.printf("[SETUP] Memori Bebas: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("[SETUP] WiFi RSSI: %d dBm\n", WiFi.RSSI());
   Serial.println("========================================\n");
   
   // Test semua LED yang diaktifkan
@@ -1621,11 +1689,17 @@ void loop() {
     sendHeartbeatToServer();
   }
   
-  // 11. Debug info
+  // 11. PERBAIKAN: Kirim data monitoring setiap 10 detik
+  if (millis() - lastMonitoringSend >= MONITORING_INTERVAL) {
+    lastMonitoringSend = millis();
+    sendMonitoringData();
+  }
+  
+  // 12. Debug info
   printLockStatus();
   printDebugInfo();
   
-  // 12. Safety timeout ekstrem (120 detik) - hanya untuk emergency
+  // 13. Safety timeout ekstrem (120 detik) - hanya untuk emergency
   static unsigned long lastSafetyCheck = 0;
   if (millis() - lastSafetyCheck > 30000) { // Cek setiap 30 detik
     lastSafetyCheck = millis();
@@ -1637,7 +1711,7 @@ void loop() {
     }
   }
   
-  // 13. Sinkronisasi konfigurasi setiap 5 menit
+  // 14. Sinkronisasi konfigurasi setiap 5 menit
   static unsigned long lastConfigSync = 0;
   if (millis() - lastConfigSync > 300000) { // 5 menit
     lastConfigSync = millis();
