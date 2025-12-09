@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -125,21 +125,22 @@ function updateESP32Status(status) {
     }
   }
   
-  // Update informasi sinyal WiFi
+  // Update informasi sinyal WiFi - DIPERBAIKI
   if (esp32WiFiRSSI && esp32Status.wifiRSSI) {
     esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
     
+    // Logika warna berdasarkan kekuatan sinyal yang benar
     if (esp32Status.wifiRSSI > -60) {
-      esp32WiFiRSSI.style.color = "#4caf50";
+      esp32WiFiRSSI.style.color = "#4caf50"; // HIJAU untuk kuat (> -60 dBm)
       esp32WiFiRSSI.title = "Sinyal WiFi: KUAT";
     } else if (esp32Status.wifiRSSI > -70) {
-      esp32WiFiRSSI.style.color = "#ff9800";
+      esp32WiFiRSSI.style.color = "#ff9800"; // ORANGE untuk sedang (-60 s/d -70 dBm)
       esp32WiFiRSSI.title = "Sinyal WiFi: SEDANG";
     } else if (esp32Status.wifiRSSI > -80) {
-      esp32WiFiRSSI.style.color = "#ff9800";
+      esp32WiFiRSSI.style.color = "#f44336"; // MERAH untuk lemah (-70 s/d -80 dBm)
       esp32WiFiRSSI.title = "Sinyal WiFi: LEMAH";
     } else {
-      esp32WiFiRSSI.style.color = "#f44336";
+      esp32WiFiRSSI.style.color = "#d32f2f"; // MERAH TUA untuk sangat lemah (< -80 dBm)
       esp32WiFiRSSI.title = "Sinyal WiFi: SANGAT LEMAH";
     }
   } else if (esp32WiFiRSSI) {

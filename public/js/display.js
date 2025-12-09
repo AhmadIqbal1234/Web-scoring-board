@@ -538,7 +538,7 @@ function loadInitialData() {
     fetch('/scores').then(r => r.json()),
     fetch('/lockstate').then(r => r.json()),
     fetch('/teamToggleState').then(r => r.json()),
-    fetch('/timerstate').then(r => text())
+    fetch('/timerstate').then(r => r.text())
   ])
   .then(([scoresData, lockStateData, toggleStateData, timerState]) => {
     // Update scores
@@ -625,7 +625,7 @@ socket.on("buzz", ({ team }) => {
   console.log(`[BUZZ] Processing buzz for Team ${getTeamLetter(team)}`);
   
   if (teamToggleState[team - 1]) {
-    // Immediate visual feedback
+    // Immediate visual feedback - TAMPILKAN TIM YANG MENEKAN
     showActiveTeam(team);
     
     // Audio buzzer akan diputar via event "playPreTeamAudio" dari server
@@ -754,6 +754,8 @@ socket.on("lockstate", state => {
     resetDisplay();
     clearAtomicLock();
   } else if (state.activeTeam) {
+    // JANGAN reset display jika sistem terkunci
+    // Hanya tampilkan tim aktif
     showActiveTeam(state.activeTeam);
     setAtomicLock(state.activeTeam);
   }
@@ -844,6 +846,8 @@ socket.on("timerStart", (data) => {
   if (data.duration) {
     updateTimerDisplayOptimized(data.duration);
   }
+  // JANGAN reset display saat timer dimulai
+  // Biarkan tampilan tetap fokus pada tim yang aktif
 });
 
 socket.on("timerUpdate", (data) => {
@@ -858,6 +862,7 @@ socket.on("timerUpdate", (data) => {
   }, TIMER_UPDATE_DEBOUNCE);
 });
 
+// ===== PERBAIKAN: Event timerReset JANGAN reset display jika sistem terkunci =====
 socket.on("timerReset", () => {
   console.log('[TIMER] Reset');
   
@@ -867,8 +872,14 @@ socket.on("timerReset", () => {
   
   timerUpdateTimeout = setTimeout(() => {
     resetTimerDisplay();
-    resetDisplay();
-    clearAtomicLock();
+    
+    // Hanya reset display jika tidak ada kunci aktif
+    if (!atomicLockState.locked) {
+      resetDisplay();
+      clearAtomicLock();
+    } else {
+      console.log('[TIMER] Sistem terkunci, tetap tampilkan tim aktif');
+    }
   }, TIMER_UPDATE_DEBOUNCE);
 });
 

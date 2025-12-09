@@ -677,14 +677,19 @@ function resetTimerOnly() {
   isTimerRunning = false;
   timeRemaining = 0;
   
-  io.emit("timerReset");
-  // Tidak mengubah lockState
+  // PERBAIKAN: Jangan kirim timerReset jika sistem masih terkunci
+  // Hanya kirim event timerReset jika tidak ada kunci
+  if (!lockState.locked) {
+    io.emit("timerReset");
+  }
+  
   lastTimerEvent = 'timerReset';
   
   logger.performance("Timer direset (hanya timer)", {
     lockState: lockState
   });
 }
+
 
 // ===== ENDPOINT PING =====
 app.get("/ping", (req, res) => {
