@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -16,7 +16,13 @@ let esp32Status = {
   connectionType: null,
   activeTeams: 12,
   modulesDetected: 4,
-  heartbeatCount: 0
+  heartbeatCount: 0,
+  // PERBAIKAN TAMBAHAN:
+  temperature: null,
+  lastTemperatureUpdate: null,
+  freeHeap: 0,
+  wifiRSSI: 0,
+  uptime: 0
 };
 
 // ===== LOGGER =====
@@ -48,6 +54,10 @@ function updateESP32Status(status) {
   const esp32Connection = document.getElementById("esp32Connection");
   const esp32LastActivity = document.getElementById("esp32LastActivity");
   const esp32SocketId = document.getElementById("esp32SocketId");
+  const esp32Temperature = document.getElementById("esp32Temperature");
+  const esp32Heap = document.getElementById("esp32Heap");
+  const esp32RSSI = document.getElementById("esp32RSSI");
+  const esp32Uptime = document.getElementById("esp32Uptime");
   
   const sebelumnyaOnline = esp32Status.connected;
   
@@ -104,6 +114,59 @@ function updateESP32Status(status) {
     esp32SocketId.textContent = esp32Status.socketId || "Koneksi HTTP";
   }
   
+  // PERBAIKAN: Update informasi suhu dan monitoring
+  if (esp32Temperature && esp32Status.temperature !== null) {
+    esp32Temperature.textContent = `${esp32Status.temperature.toFixed(1)}°C`;
+    
+    // Warna berdasarkan suhu
+    if (esp32Status.temperature > 70) {
+      esp32Temperature.style.color = "#ff4444";
+      esp32Temperature.style.fontWeight = "bold";
+      esp32Temperature.classList.add("temperature-warning");
+    } else if (esp32Status.temperature > 60) {
+      esp32Temperature.style.color = "#ff9800";
+      esp32Temperature.classList.remove("temperature-warning");
+    } else {
+      esp32Temperature.style.color = "#4caf50";
+      esp32Temperature.classList.remove("temperature-warning");
+    }
+  }
+  
+  if (esp32Heap && esp32Status.freeHeap) {
+    esp32Heap.textContent = `${Math.round(esp32Status.freeHeap / 1024)} KB`;
+    if (esp32Status.freeHeap < 10000) {
+      esp32Heap.style.color = "#ff9800";
+    } else {
+      esp32Heap.style.color = "#4caf50";
+    }
+  }
+  
+  if (esp32RSSI && esp32Status.wifiRSSI) {
+    esp32RSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
+    if (esp32Status.wifiRSSI > -50) {
+      esp32RSSI.style.color = "#4caf50";
+    } else if (esp32Status.wifiRSSI > -70) {
+      esp32RSSI.style.color = "#ff9800";
+    } else {
+      esp32RSSI.style.color = "#f44336";
+    }
+  }
+  
+  if (esp32Uptime && esp32Status.uptime) {
+    const hours = Math.floor(esp32Status.uptime / 3600);
+    const minutes = Math.floor((esp32Status.uptime % 3600) / 60);
+    const seconds = esp32Status.uptime % 60;
+    esp32Uptime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    
+    if (esp32Status.uptime > 3600) {
+      esp32Uptime.style.color = "#4caf50";
+    } else if (esp32Status.uptime > 1800) {
+      esp32Uptime.style.color = "#ff9800";
+    } else {
+      esp32Uptime.style.color = "#f44336";
+    }
+  }
+  
   updateESP32Timestamp();
   
   if (sebelumnyaOnline !== esp32Status.connected) {
@@ -116,7 +179,8 @@ function updateESP32Status(status) {
     adminLogger.esp32(`Status changed: ${esp32Status.connected ? 'CONNECTED' : 'DISCONNECTED'}`, {
       lastActivity: esp32Status.lastActivity,
       connectionType: esp32Status.connectionType,
-      heartbeatCount: esp32Status.heartbeatCount
+      heartbeatCount: esp32Status.heartbeatCount,
+      temperature: esp32Status.temperature
     });
   }
 }
@@ -166,7 +230,6 @@ function toggleTeamStatus(teamNumber) {
       return r.json();
     })
     .then(data => {
-      // Update local state only after successful server response
       teamStatus[teamNumber - 1] = newStatus;
       
       const teamCard = document.querySelector(`.team-card[data-team="${teamNumber}"]`);
@@ -301,6 +364,22 @@ function initializeESP32Controls() {
   });
 }
 
+// ===== PERBAIKAN: START TEMPERATURE MONITORING =====
+function startTemperatureMonitoring() {
+  setInterval(() => {
+    if (esp32Status.connected && esp32Status.lastTemperatureUpdate) {
+      const now = new Date();
+      const lastUpdate = new Date(esp32Status.lastTemperatureUpdate);
+      const diffMinutes = (now - lastUpdate) / (1000 * 60);
+      
+      // Jika data suhu lebih dari 1 menit, refresh
+      if (diffMinutes > 1) {
+        socket.emit("getESP32Status");
+      }
+    }
+  }, 30000);
+}
+
 // ===== FORCE UNLOCK ALL =====
 function forceUnlockAll() {
   if (!confirm("Yakin ingin membuka kunci paksa dari semua tim dan timer?\nIni akan membuka semua kunci dan menghentikan timer.")) return;
@@ -365,7 +444,6 @@ function manualSyncWithESP32() {
     .then(data => {
       showNotification("Sync berhasil", "success");
       
-      // Update UI berdasarkan data dari server
       const timerStateEl = document.getElementById("timerState");
       const currentTimeEl = document.getElementById("currentTime");
       
@@ -381,7 +459,6 @@ function manualSyncWithESP32() {
         }
       }
       
-      // Update lock state
       if (data.lock.locked && data.lock.activeTeam) {
         lockState = data.lock;
         updateLockStateUI();
@@ -430,7 +507,8 @@ function refreshESP32Status() {
       adminLogger.esp32('Status refreshed', {
         connected: data.terhubung,
         lastActivity: data.aktivitasTerakhir,
-        heartbeatCount: data.heartbeatCount
+        heartbeatCount: data.heartbeatCount,
+        temperature: data.suhu
       });
     })
     .catch(err => {
@@ -463,14 +541,17 @@ function testESP32Connection() {
           resultDiv.innerHTML = `
             <strong>TEST BERHASIL</strong><br>
             <small>${data.pesan}</small><br>
-            <small>${data.detail.sejakAktivitasTerakhir} sejak aktivitas terakhir</small>
+            <small>Suhu: ${data.detail.suhu || 'N/A'}</small><br>
+            <small>Memori: ${data.detail.memoriBebas || 'N/A'}</small>
           `;
           showNotification("ESP32 ONLINE", "success");
           
           updateESP32Status({
             connected: true,
             lastActivity: data.detail.aktivitasTerakhir,
-            ip: data.detail.ip
+            ip: data.detail.ip,
+            temperature: data.detail.suhu,
+            freeHeap: data.detail.memoriBebas
           });
         } else {
           resultDiv.innerHTML = `
@@ -730,7 +811,8 @@ socket.on("esp32Status", (status) => {
   console.log("ESP32 Status received:", {
     connected: status.connected,
     lastActivity: status.lastActivity,
-    heartbeatCount: status.heartbeatCount
+    heartbeatCount: status.heartbeatCount,
+    temperature: status.temperature
   });
   updateESP32Status(status);
 });
@@ -857,7 +939,6 @@ socket.on("reset", (scores) => {
   }
 });
 
-// PERBAIKAN: Event handler untuk sync toggle state
 socket.on("teamToggleUpdate", (data) => {
   const { team, enabled } = data;
   console.log(`[ADMIN] Team toggle update from server: Team ${team} = ${enabled}`);
@@ -865,7 +946,6 @@ socket.on("teamToggleUpdate", (data) => {
   if (team >= 1 && team <= TEAM_COUNT) {
     teamStatus[team - 1] = enabled;
     
-    // Update UI
     const teamCard = document.querySelector(`.team-card[data-team="${team}"]`);
     const toggleBtn = document.getElementById(`toggle-${team}`);
     const badgeEl = document.getElementById(`badge-${team}`);
@@ -894,7 +974,6 @@ socket.on("allTeamsEnabled", () => {
   console.log('[ADMIN] All teams enabled from server');
   teamStatus = Array(TEAM_COUNT).fill(true);
   
-  // Update all UI
   for (let i = 1; i <= TEAM_COUNT; i++) {
     const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
     const toggleBtn = document.getElementById(`toggle-${i}`);
@@ -915,7 +994,6 @@ socket.on("allTeamsDisabled", () => {
   console.log('[ADMIN] All teams disabled from server');
   teamStatus = Array(TEAM_COUNT).fill(false);
   
-  // Update all UI
   for (let i = 1; i <= TEAM_COUNT; i++) {
     const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
     const toggleBtn = document.getElementById(`toggle-${i}`);
@@ -1049,6 +1127,9 @@ function initializeAdmin() {
   refreshESP32Status();
   loadAutoPenaltyStatus();
   
+  // PERBAIKAN: Start temperature monitoring
+  startTemperatureMonitoring();
+  
   Promise.all([
     fetch('/lockstate').then(r => r.json()),
     fetch('/scores').then(r => r.json()),
@@ -1069,7 +1150,6 @@ function initializeAdmin() {
       }
     }
     
-    // Update UI berdasarkan initial state
     for (let i = 1; i <= TEAM_COUNT; i++) {
       const teamCard = document.querySelector(`.team-card[data-team="${i}"]`);
       const toggleBtn = document.getElementById(`toggle-${i}`);
@@ -1105,7 +1185,7 @@ function initializeAdmin() {
 // ===== START =====
 document.addEventListener('DOMContentLoaded', function() {
   adminLogger.info('Admin panel initializing...');
-  console.log('[OPTIMIZATION] Responsive button system enabled');
-  console.log('[SYNC] Manual sync button added');
+  console.log('[PERBAIKAN] Anti-idle system enabled');
+  console.log('[PERBAIKAN] Temperature monitoring enabled');
   initializeAdmin();
 });

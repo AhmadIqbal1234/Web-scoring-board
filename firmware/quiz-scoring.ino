@@ -79,6 +79,20 @@ bool moduleDetected[4] = {false, false, false, false}; // Modul yang terdeteksi
 uint8_t enabledTeams[12] = {0};                        // Daftar tim yang diaktifkan
 uint8_t activeTeamCount = 0;                           // Jumlah tim yang aktif
 
+// ====== KONFIGURASI TIMER DARI SERVER ======
+struct TimerConfig {
+  int timerDuration = 30;
+  bool autoPenalty = true;
+  int plusPoints = 5;
+  int minusPoints = -2;
+};
+
+TimerConfig config;
+
+// ====== NILAI POIN UNTUK JURI (untuk kompatibilitas) ======
+int plusValue = 5;    // Nilai default untuk tombol BENAR
+int minusValue = -2;  // Nilai default untuk tombol SALAH
+
 // ====== PERBAIKAN DEBOUNCE ======
 const uint64_t BUTTON_DEBOUNCE_MS = 20;           // DEBOUNCE 20ms
 const uint64_t BUTTON_LOCK_DELAY_MS = 50;         // Delay sebelum lock 50ms
@@ -192,8 +206,6 @@ unsigned long lastSystemCheck = 0;
 bool lastJuryCorrectState = HIGH;
 bool lastJuryWrongState   = HIGH;
 unsigned long lastJuryPressTime = 0;
-int plusValue  = 5;
-int minusValue = -2;
 
 // ========== VARIABEL DEBUG ==========
 bool debugEnabled = true;
@@ -814,6 +826,63 @@ void sendHeartbeatToServer() {
   }
 }
 
+// ========== SINCRONISASI KONFIGURASI DARI SERVER ==========
+void syncConfiguration() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[CONFIG] WiFi tidak terhubung, tidak bisa sinkronisasi konfigurasi");
+    return;
+  }
+
+  String url = "https://" + String(serverHost) + "/config";
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  
+  Serial.printf("[CONFIG] Mengambil konfigurasi dari: %s\n", url.c_str());
+  
+  if (http.begin(url)) {
+    int httpCode = http.GET();
+    if (httpCode == 200) {
+      String payload = http.getString();
+      DynamicJsonDocument doc(256);
+      DeserializationError error = deserializeJson(doc, payload);
+      
+      if (!error) {
+        int newDuration = doc["timerDuration"];
+        int newPlus = doc["plus"];
+        int newMinus = doc["minus"];
+        
+        if (newDuration != config.timerDuration) {
+          config.timerDuration = newDuration;
+          Serial.printf("[CONFIG] Durasi timer diperbarui: %d detik\n", config.timerDuration);
+        }
+        
+        if (newPlus != config.plusPoints) {
+          config.plusPoints = newPlus;
+          plusValue = config.plusPoints;  // Update nilai plusValue
+          Serial.printf("[CONFIG] Poin benar diperbarui: +%d\n", config.plusPoints);
+        }
+        
+        if (newMinus != config.minusPoints) {
+          config.minusPoints = newMinus;
+          minusValue = config.minusPoints;  // Update nilai minusValue
+          Serial.printf("[CONFIG] Poin salah diperbarui: %d\n", config.minusPoints);
+        }
+        
+      } else {
+        Serial.printf("[CONFIG] Gagal parsing JSON: %s\n", error.c_str());
+      }
+    } else {
+      Serial.printf("[CONFIG] Gagal mengambil konfigurasi, kode HTTP: %d\n", httpCode);
+    }
+    http.end();
+  } else {
+    Serial.println("[CONFIG] Gagal memulai koneksi HTTP");
+  }
+}
+
 // ========== FUNGSI RESET WiFi ==========
 void handleWifiReset() {
   bool corrPressed = digitalRead(PIN_JURY_CORRECT) == LOW;
@@ -1069,6 +1138,7 @@ void handleJuryButtonAction(bool isCorrect) {
     return;
   }
   
+  // Gunakan plusValue dan minusValue yang sudah diupdate dari config
   int points = isCorrect ? plusValue : minusValue;
   const char* action = isCorrect ? "BENAR" : "SALAH";
   
@@ -1443,6 +1513,7 @@ void setup() {
   Serial.println("  2. Polling setiap 1 detik untuk cek status timer");
   Serial.println("  3. Timer web habis → ESP32 otomatis unlock");
   Serial.println("  4. Tombol lain terkunci sampai timer habis");
+  Serial.println("  5. Sinkronisasi konfigurasi dari server web");
   Serial.println("");
   
   // Inisialisasi I2C
@@ -1459,6 +1530,9 @@ void setup() {
   
   // Setup WiFi
   setupWiFiManager();
+  
+  // Sinkronisasi konfigurasi dari server
+  syncConfiguration();
   
   // Inisialisasi modul
   initializeModules();
@@ -1561,6 +1635,13 @@ void loop() {
       resetSystemState();
       clearAllLEDs();
     }
+  }
+  
+  // 13. Sinkronisasi konfigurasi setiap 5 menit
+  static unsigned long lastConfigSync = 0;
+  if (millis() - lastConfigSync > 300000) { // 5 menit
+    lastConfigSync = millis();
+    syncConfiguration();
   }
   
   // Yield untuk task ESP32

@@ -1,4 +1,4 @@
-﻿﻿<!doctype html>
+﻿﻿﻿<!doctype html>
 <html lang="id" class="admin-page">
 <head>
   <meta charset="utf-8" />
@@ -219,6 +219,16 @@
       font-size: 0.9rem;
       color: #a0a0ff;
     }
+
+    /* Temperature warning animation */
+    .temperature-warning {
+      animation: temperaturePulse 1s infinite;
+    }
+
+    @keyframes temperaturePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
   </style>
   <script>
   // Force favicon load
@@ -330,10 +340,31 @@
               <span class="detail-label">Socket ID:</span>
               <span class="detail-value" id="esp32SocketId">-</span>
             </div>
+
+            <!-- PERBAIKAN: Tambah informasi suhu dan monitoring -->
+            <div class="detail-item">
+              <span class="detail-label">Suhu ESP32:</span>
+              <span class="detail-value" id="esp32Temperature">-</span>
+            </div>
+
+            <div class="detail-item">
+              <span class="detail-label">Memori Bebas:</span>
+              <span class="detail-value" id="esp32Heap">-</span>
+            </div>
+
+            <div class="detail-item">
+              <span class="detail-label">Sinyal WiFi:</span>
+              <span class="detail-value" id="esp32RSSI">-</span>
+            </div>
+
+            <div class="detail-item">
+              <span class="detail-label">Uptime:</span>
+              <span class="detail-value" id="esp32Uptime">-</span>
+            </div>
             
             <div class="detail-item">
               <span class="detail-label">Fitur:</span>
-              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager + Timer Sync</span>
+              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager + Timer Sync + Temperature Monitoring</span>
             </div>
           </div>
         </div>
