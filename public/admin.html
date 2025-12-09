@@ -92,7 +92,7 @@
     </section>
 
     <section class="admin-panel">
-      <h2 class="panel-title">Status ESP32 Controller - MONITORING</h2>
+      <h2 class="panel-title">Status ESP32 Controller</h2>
       
       <div class="esp32-status" id="esp32Status">
         <div class="controller-info">
@@ -116,41 +116,10 @@
               <span class="detail-label">Socket ID:</span>
               <span class="detail-value" id="esp32SocketId">-</span>
             </div>
-
-            <!-- PERBAIKAN: Tambah informasi monitoring lengkap -->
-            <div class="detail-item">
-              <span class="detail-label">Suhu ESP32:</span>
-              <span class="detail-value" id="esp32Temperature">-</span>
-            </div>
-
-            <div class="detail-item">
-              <span class="detail-label">Memori Bebas:</span>
-              <span class="detail-value" id="esp32Heap">-</span>
-            </div>
-
-            <div class="detail-item">
-              <span class="detail-label">Sinyal WiFi:</span>
-              <span class="detail-value" id="esp32RSSI">-</span>
-            </div>
-
-            <div class="detail-item">
-              <span class="detail-label">Uptime:</span>
-              <span class="detail-value" id="esp32Uptime">-</span>
-            </div>
-            
-            <div class="detail-item">
-              <span class="detail-label">Modul Terdeteksi:</span>
-              <span class="detail-value" id="esp32Modules">-</span>
-            </div>
-            
-            <div class="detail-item">
-              <span class="detail-label">Tim Aktif:</span>
-              <span class="detail-value" id="esp32ActiveTeams">-</span>
-            </div>
             
             <div class="detail-item">
               <span class="detail-label">Fitur:</span>
-              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager + Timer Sync + Temperature Monitoring</span>
+              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager + Timer Sync</span>
             </div>
           </div>
         </div>
@@ -162,6 +131,10 @@
           
           <button id="testESP32" class="admin-btn btn-test">
             TEST KONEKSI
+          </button>
+          
+          <button id="manualSync" class="admin-btn btn-sync">
+            SYNC TIMER MANUAL
           </button>
         </div>
         
