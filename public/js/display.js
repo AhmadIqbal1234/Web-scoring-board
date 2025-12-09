@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -538,7 +538,7 @@ function loadInitialData() {
     fetch('/scores').then(r => r.json()),
     fetch('/lockstate').then(r => r.json()),
     fetch('/teamToggleState').then(r => r.json()),
-    fetch('/timerstate').then(r => r.text())
+    fetch('/timerstate').then(r => text())
   ])
   .then(([scoresData, lockStateData, toggleStateData, timerState]) => {
     // Update scores
@@ -628,17 +628,8 @@ socket.on("buzz", ({ team }) => {
     // Immediate visual feedback
     showActiveTeam(team);
     
-    // Play audio
-    const audioSuccess = audioTim.putarAudio(team, {
-      action: "startTimer",
-      team: team
-    });
-    
-    if (!audioSuccess) {
-      setTimeout(() => {
-        socket.emit("preTeamAudioFinished", { team: team });
-      }, 300);
-    }
+    // Audio buzzer akan diputar via event "playPreTeamAudio" dari server
+    // Audio tim akan diputar via event "playTeamAudio" setelah buzzer selesai
   } else {
     console.log(`[BUZZ] Team ${getTeamLetter(team)} is disabled`);
   }
@@ -690,24 +681,26 @@ socket.on("teamToggleState", data => {
   }
 });
 
-// Play pre-team audio (buzzer)
+// ===== EVENT PLAY PRE TEAM AUDIO (BUZZER) =====
 socket.on("playPreTeamAudio", (data) => {
   const { team, audioFile } = data;
 
   console.log(`[BUZZER] Memutar audio buzzer untuk Tim ${getTeamLetter(team)}`);
   
+  // Hentikan audio tim jika sedang diputar
   audioTim.berhenti();
   
   const buzzerAudio = new Audio(`/audio/${audioFile}`);
   
   buzzerAudio.onerror = (e) => {
     console.error('Error memutar buzzer audio:', e);
-    playTeamAudioDirectly(team);
+    // Jika gagal, beritahu server
+    socket.emit("preTeamAudioFinished", { team: team });
   };
   
   buzzerAudio.onended = () => {
     console.log('[BUZZER] Buzzer selesai, lanjut ke audio tim');
-    playTeamAudioDirectly(team);
+    // Beritahu server bahwa buzzer selesai
     socket.emit("preTeamAudioFinished", { team: team });
   };
   
@@ -715,7 +708,7 @@ socket.on("playPreTeamAudio", (data) => {
   if (playPromise !== undefined) {
     playPromise.catch(error => {
       console.error('Gagal memutar buzzer audio:', error);
-      playTeamAudioDirectly(team);
+      socket.emit("preTeamAudioFinished", { team: team });
     });
   }
 });

@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -655,21 +655,34 @@ function forceUnlockSystem() {
 
 // ===== MEMUTAR AUDIO BUZZER DAN TIM =====
 function playBuzzerThenTeamAudio(team) {
-  const teamAudioFile = getTeamAudioFile(team);
-  
-  logger.audio(`Memulai urutan audio untuk Tim ${getTeamLetter(team)}`);
+  logger.audio(`Memulai urutan audio buzzer untuk Tim ${getTeamLetter(team)}`);
   
   const buzzerPlayed = timerAudio.playPreTeamAudio(team);
   
-  if (!isTimerRunning) {
-    startTimer(team);
-    logger.performance("Timer langsung dimulai", { tim: team });
+  // Timer tidak dimulai di sini, akan dimulai setelah buzzer selesai (di preTeamAudioFinished)
+}
+
+// ===== FUNGSI RESET TIMER TANPA LOCK =====
+function resetTimerOnly() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
   }
   
-  io.emit("playTeamAudio", {
-    team: team,
-    audioFile: teamAudioFile,
-    timerDuration: config.timerDuration
+  if (audioFinishTimeout) {
+    clearTimeout(audioFinishTimeout);
+    audioFinishTimeout = null;
+  }
+  
+  isTimerRunning = false;
+  timeRemaining = 0;
+  
+  io.emit("timerReset");
+  // Tidak mengubah lockState
+  lastTimerEvent = 'timerReset';
+  
+  logger.performance("Timer direset (hanya timer)", {
+    lockState: lockState
   });
 }
 
@@ -870,7 +883,7 @@ app.get("/update", (req, res) => {
   });
 });
 
-// ===== ENDPOINT LAINNYA =====
+// ===== ENDPOINT PING =====
 app.get("/timerstate", (req, res) => {
   res.send(isTimerRunning ? timeRemaining.toString() : "0");
 });
@@ -1253,11 +1266,18 @@ app.get("/audioFinished", (req, res) => {
   });
 });
 
+// ===== ENDPOINT: PRE TEAM AUDIO FINISHED (BUZZER SELESAI) =====
 app.get("/preTeamAudioFinished", (req, res) => {
   const team = parseInt(req.query.team);
   
   if (team) {
     const teamAudioFile = getTeamAudioFile(team);
+    
+    // Reset timer jika sedang berjalan, tanpa melepaskan kunci
+    if (isTimerRunning) {
+      resetTimerOnly();
+    }
+    startTimer(team);
     
     io.emit("playTeamAudio", {
       team: team,
@@ -1268,7 +1288,7 @@ app.get("/preTeamAudioFinished", (req, res) => {
   
   res.json({ 
     sukses: true, 
-    pesan: "Audio pre-tim selesai, audio tim dimulai",
+    pesan: "Audio buzzer selesai, audio tim dan timer dimulai",
     tim: team
   });
 });
@@ -1522,11 +1542,18 @@ io.on("connection", (socket) => {
     });
   });
 
+  // Event untuk menandai buzzer selesai
   socket.on("preTeamAudioFinished", (data) => {
     const team = data.team;
     
     if (team) {
       const teamAudioFile = getTeamAudioFile(team);
+      
+      // Reset timer jika sedang berjalan, tanpa melepaskan kunci
+      if (isTimerRunning) {
+        resetTimerOnly();
+      }
+      startTimer(team);
       
       io.emit("playTeamAudio", {
         team: team,
@@ -1561,7 +1588,7 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS - DENGAN TIMER SYNC');
+    console.log('SISTEM KUIS Ridwan and Team');
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Tampilan: http://localhost:${PORT}`);
