@@ -3,25 +3,199 @@
 <head>
   <meta charset="utf-8" />
   <link rel="icon" href="./tts/android-chrome-192x192.png">
-  <title>Papan Skor - Cerdas Cermat</title>
+  <title>Panel Testing - Cerdas Cermat</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/styles.css" />
+  <style>
+    /* ===== TEST PANEL STYLES ===== */
+    .test-panel {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(26, 26, 74, 0.95);
+      border: 2px solid #ffd700;
+      border-radius: 12px;
+      padding: 15px;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(10px);
+      max-width: 400px;
+      transition: all 0.3s ease;
+    }
+
+    .test-panel.collapsed {
+      width: 60px;
+      height: 60px;
+      overflow: hidden;
+      padding: 10px;
+    }
+
+    .test-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #2a2a6a;
+    }
+
+    .test-panel-title {
+      color: #ffd700;
+      font-weight: bold;
+      font-size: 1.1rem;
+    }
+
+    .test-panel-toggle {
+      background: none;
+      border: none;
+      color: #ffd700;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 5px;
+      border-radius: 4px;
+    }
+
+    .test-panel-toggle:hover {
+      background: rgba(255, 215, 0, 0.1);
+    }
+
+    .test-panel-content {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 15px;
+    }
+
+    .test-team-btn {
+      background: linear-gradient(145deg, #1a1a4a, #25255a);
+      border: 1px solid #2a2a6a;
+      border-radius: 6px;
+      color: white;
+      padding: 8px 5px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+    }
+
+    .test-team-btn:hover {
+      border-color: #ffd700;
+      transform: translateY(-2px);
+    }
+
+    .test-team-btn:active {
+      transform: translateY(0);
+    }
+
+    .test-jury-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .test-jury-btn {
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .test-jury-correct {
+      background: linear-gradient(145deg, #00aa00, #008800);
+      color: white;
+    }
+
+    .test-jury-wrong {
+      background: linear-gradient(145deg, #ff4444, #cc0000);
+      color: white;
+    }
+
+    .test-jury-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .test-jury-btn:active {
+      transform: translateY(0);
+    }
+
+    .test-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .test-control-btn {
+      padding: 8px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .test-reset {
+      background: linear-gradient(145deg, #ff6b00, #ff8c00);
+      color: white;
+    }
+
+    .test-unlock {
+      background: linear-gradient(145deg, #00d4ff, #0099cc);
+      color: white;
+    }
+
+    .test-status {
+      margin-top: 10px;
+      padding: 8px;
+      background: rgba(10, 10, 42, 0.7);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      text-align: center;
+      color: #a0a0cc;
+      min-height: 20px;
+    }
+
+    /* Responsive styles */
+    @media (max-width: 768px) {
+      .test-panel {
+        bottom: 10px;
+        right: 10px;
+        left: 10px;
+        max-width: none;
+      }
+      
+      .test-panel.collapsed {
+        width: 50px;
+        height: 50px;
+        bottom: 10px;
+        right: 10px;
+      }
+      
+      .test-panel-content {
+        grid-template-columns: repeat(6, 1fr);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .test-panel-content {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+  </style>
 </head>
 <body>
   <div class="content-wrapper">
     <div class="header-container">
       <div class="live-indicator"></div>
       <div class="event-title">Cerdas Cermat</div>
-      <div class="event-subtitle">SMK N 1 Wonosegoro</div>
-      <!-- <div class="running-text red">
-        <div class="text-content">
-          PERINGATAN: Sedang ada perbaikan fitur penilaian. Jika juri tidak merespons, poin akan dikurangi otomatis! Mohon maaf atas ketidaknyamanannya.
-        </div>
-      </div> -->
+      <div class="event-subtitle">SMK N 1 Wonosegoro - PANEL TESTING</div>
     </div>
 
     <div class="timer-container">
-      <div class="timer inactive">00:00</div> <!-- CLASS INACTIVE UNTUK HIJAU -->
+      <div class="timer">00:00</div>
     </div>
 
     <main>
@@ -32,7 +206,6 @@
       <div id="aiMessage" class="ai-message"></div>
     </main>
   </div>
-
   <footer>
     <h5>Copyright © 2025 Ridwan and Team</h5>
   </footer>
