@@ -1,4 +1,4 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -63,7 +63,7 @@ const limiter = rateLimit({
       '/timerstatus',
       '/synctimer',
       '/ping',
-      '/debug/monitoring'  // PERBAIKAN: Tambah endpoint debug
+      '/debug/monitoring'
     ];
     
     const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
@@ -130,14 +130,9 @@ let esp32Status = {
   lastBroadcast: null,
   lastHeartbeat: null,
   heartbeatCount: 0,
-  // PERBAIKAN TAMBAHAN:
-  temperature: null,
-  lastTemperatureUpdate: null,
-  uptime: 0,
-  freeHeap: 0,
-  wifiRSSI: 0,
+  modulesDetected: 0,
   activeTeams: 0,
-  modulesDetected: 0
+  wifiRSSI: 0
 };
 
 // ===== SISTEM LOG OPTIMIZED =====
@@ -269,10 +264,10 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// ===== ATOMIC LOCK FUNCTIONS - OPTIMIZED FOR RESPONSIVENESS =====
+// ===== ATOMIC LOCK FUNCTIONS =====
 function acquireAtomicLock(team) {
   const now = Date.now();
-  const lockThreshold = 10;  // PERBAIKAN: Ditingkatkan dari 3ms ke 10ms
+  const lockThreshold = 10;
   
   if (lockState.locked) {
     const lockAge = now - (lockState.lockTime || now);
@@ -287,7 +282,7 @@ function acquireAtomicLock(team) {
       return false;
     }
     
-    if (lockAge < 50) {  // PERBAIKAN: Diperpanjang dari 100ms ke 50ms
+    if (lockAge < 50) {
       logger.lock(`Duplikat buzz dari Tim ${getTeamLetter(team)} diabaikan`);
       return false;
     }
@@ -318,7 +313,7 @@ function releaseAtomicLock() {
   logger.lock(`Lock RELEASED (previous active: ${previousActive ? getTeamLetter(previousActive) : 'none'})`);
 }
 
-// ===== SISTEM PENALTI OTOMATIS OPTIMIZED =====
+// ===== SISTEM PENALTI OTOMATIS =====
 function handleAutoPenalty() {
   if (!lockState.locked || !lockState.activeTeam) {
     logger.info('Auto penalty: Tidak ada tim aktif, lewati penalti');
@@ -382,7 +377,7 @@ function handleAutoPenalty() {
   });
 }
 
-// ===== FUNGSI BUKA KUNCI SISTEM OPTIMIZED =====
+// ===== FUNGSI BUKA KUNCI SISTEM =====
 function unlockSystemOnTimerEnd() {
   logger.performance("Unlock system - timer ended");
   
@@ -471,48 +466,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== SISTEM STATUS ESP32 =====
-function updateESP32Status(connected, socket = null, ip = null, activityType = "unknown") {
-  const previousStatus = esp32Status.connected;
-  const previousIP = esp32Status.ip;
-  
-  if (connected) {
-    esp32Status.connected = true;
-    esp32Status.lastActivity = new Date();
-    esp32Status.lastCheckin = new Date();
-    esp32Status.connectionType = activityType;
-    
-    if (activityType.includes('heartbeat') || activityType.includes('checkin')) {
-      esp32Status.lastHeartbeat = new Date();
-      esp32Status.heartbeatCount = (esp32Status.heartbeatCount || 0) + 1;
-    }
-    
-    if (socket) {
-      esp32Status.socketId = socket.id;
-    }
-    
-    if (ip) {
-      esp32Status.ip = ip;
-    }
-    
-    logger.esp32(`Aktivitas ESP32 - ${activityType}`, {
-      ip: ip,
-      socketId: socket ? socket.id : 'HTTP',
-      waktu: esp32Status.lastActivity.toLocaleTimeString('id-ID'),
-      heartbeatCount: esp32Status.heartbeatCount
-    });
-    
-  } else {
-    if (activityType === "esp32_shutdown" || activityType === "socket_disconnect") {
-      esp32Status.connected = false;
-      esp32Status.connectionType = "terputus";
-    }
-  }
-  
-  io.emit("esp32Status", esp32Status);
-  esp32Status.lastBroadcast = new Date();
-}
-
+// ===== UPDATE ESP32 STATUS DARI HTTP =====
 function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   const now = Date.now();
   
@@ -522,29 +476,25 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   esp32Status.connectionType = activityType;
   esp32Status.ip = ip;
   
-  // Update data tambahan jika ada
-  if (data.temperature !== undefined && data.temperature !== null) esp32Status.temperature = data.temperature;
-  if (data.heap !== undefined && data.heap !== null) esp32Status.freeHeap = data.heap;
-  if (data.rssi !== undefined && data.rssi !== null) esp32Status.wifiRSSI = data.rssi;
-  if (data.uptime !== undefined && data.uptime !== null) esp32Status.uptime = data.uptime;
+  // Update data yang diperlukan: modul, tim aktif, dan RSSI
   if (data.modules !== undefined && data.modules !== null) esp32Status.modulesDetected = data.modules;
+  if (data.teams !== undefined && data.teams !== null) esp32Status.activeTeams = data.teams;
+  if (data.rssi !== undefined && data.rssi !== null) esp32Status.wifiRSSI = data.rssi;
   
-  if (data.activeTeams !== undefined && data.activeTeams !== null) esp32Status.activeTeams = data.activeTeams;
-  
-  if (data.temperature !== undefined && data.temperature !== null) {
-    esp32Status.lastTemperatureUpdate = new Date();
+  // Update heartbeat count jika ada
+  if (data.count !== undefined && data.count !== null) {
+    esp32Status.heartbeatCount = data.count;
+    esp32Status.lastHeartbeat = new Date();
   }
   
   io.emit("esp32Status", esp32Status);
   
-  logger.esp32(`ESP32 HTTP activity - ${activityType}`, {
+  logger.esp32(`ESP32 update: ${activityType}`, {
     ip: ip,
-    status: 'ONLINE',
-    temperature: data.temperature,
-    heap: data.heap,
-    rssi: data.rssi,
-    uptime: data.uptime,
-    modules: data.modules
+    modules: esp32Status.modulesDetected,
+    teams: esp32Status.activeTeams,
+    rssi: esp32Status.wifiRSSI,
+    heartbeatCount: esp32Status.heartbeatCount
   });
   
   return esp32Status;
@@ -569,7 +519,7 @@ function checkESP32Status() {
   }
 }
 
-// ===== SISTEM TIMER OPTIMIZED =====
+// ===== SISTEM TIMER =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.performance("Timer sudah berjalan, abaikan", {
@@ -703,7 +653,7 @@ function forceUnlockSystem() {
   logger.performance("Sistem dibuka paksa");
 }
 
-// ===== MEMUTAR AUDIO BUZZER DAN TIM OPTIMIZED =====
+// ===== MEMUTAR AUDIO BUZZER DAN TIM =====
 function playBuzzerThenTeamAudio(team) {
   const teamAudioFile = getTeamAudioFile(team);
   
@@ -723,7 +673,7 @@ function playBuzzerThenTeamAudio(team) {
   });
 }
 
-// ====== PERBAIKAN: ENDPOINT PING BARU ======
+// ===== ENDPOINT PING =====
 app.get("/ping", (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress;
   const heap = parseInt(req.query.heap);
@@ -749,7 +699,7 @@ app.get("/ping", (req, res) => {
   });
 });
 
-// ===== ENDPOINT BARU: CHECK TIMER STATUS UNTUK ESP32 =====
+// ===== ENDPOINT: CHECK TIMER STATUS UNTUK ESP32 =====
 app.get("/checktimer", (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress;
   const team = parseInt(req.query.team) || 0;
@@ -769,12 +719,11 @@ app.get("/checktimer", (req, res) => {
     serverTime: new Date().toLocaleTimeString('id-ID')
   };
   
-  // Kirim response JSON
   res.setHeader('Content-Type', 'application/json');
   res.json(response);
 });
 
-// ===== ENDPOINT UNTUK GET TIMER STATUS SAJA =====
+// ===== ENDPOINT: GET TIMER STATUS =====
 app.get("/timerstatus", (req, res) => {
   const response = {
     timerRunning: isTimerRunning,
@@ -786,7 +735,7 @@ app.get("/timerstatus", (req, res) => {
   res.json(response);
 });
 
-// ===== ENDPOINT UNTUK FORCE TIMER SYNC =====
+// ===== ENDPOINT: FORCE TIMER SYNC =====
 app.get("/synctimer", (req, res) => {
   const action = req.query.action || 'status';
   
@@ -812,7 +761,7 @@ app.get("/synctimer", (req, res) => {
   res.json(response);
 });
 
-// ===== ENDPOINT UPDATE DENGAN ATOMIC LOCK OPTIMIZED =====
+// ===== ENDPOINT UPDATE =====
 app.get("/update", (req, res) => {
   const startTime = Date.now();
   const requestTime = Date.now();
@@ -830,7 +779,7 @@ app.get("/update", (req, res) => {
     return res.status(400).json({ error: "Tim tidak valid" });
   }
   
-  // PERBAIKAN: Cek toggle state
+  // Cek toggle state
   if (!teamToggleState[team - 1]) {
     logger.error(`UPDATE: Team ${team} disabled`);
     return res.status(403).json({ 
@@ -970,7 +919,7 @@ app.get("/debug/timer/fix", (req, res) => {
   });
 });
 
-// ===== ENDPOINT BARU: FORCE UNLOCK ALL =====
+// ===== ENDPOINT: FORCE UNLOCK ALL =====
 app.get("/forceUnlockAll", (req, res) => {
   logger.info("Force unlock all requested");
   
@@ -1003,66 +952,51 @@ app.get("/forceUnlockAll", (req, res) => {
   });
 });
 
-// ====== PERBAIKAN: ENDPOINT ESP32STATUS DENGAN SUHU ======
+// ===== ENDPOINT: ESP32STATUS =====
 app.get("/esp32status", (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress;
-  const temp = parseFloat(req.query.temp);
-  const heap = parseInt(req.query.heap);
-  const rssi = parseInt(req.query.rssi);
-  const uptime = parseInt(req.query.uptime);
   const modules = parseInt(req.query.modules);
   const activeTeams = parseInt(req.query.activeTeams);
+  const rssi = parseInt(req.query.rssi);
   
   // Update ESP32 status dengan data baru
   if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
     const data = {
-      temperature: temp,
-      heap: heap,
-      rssi: rssi,
-      uptime: uptime,
       modules: modules,
-      activeTeams: activeTeams
+      teams: activeTeams,
+      rssi: rssi
     };
     
     updateESP32FromHTTP(clientIP, "monitoring_update", data);
     
     logger.esp32(`Monitoring update from ${clientIP}`, {
-      temperature: temp,
-      heap: heap,
-      rssi: rssi,
-      uptime: uptime,
       modules: modules,
-      activeTeams: activeTeams
+      teams: activeTeams,
+      rssi: rssi
     });
   }
   
   res.json({
     success: true,
     received: {
-      temperature: temp,
-      heap: heap,
-      rssi: rssi,
-      uptime: uptime,
       modules: modules,
-      activeTeams: activeTeams
+      teams: activeTeams,
+      rssi: rssi
     },
     message: "Data monitoring diterima",
     serverTime: new Date().toLocaleTimeString('id-ID')
   });
 });
 
-// ===== ENDPOINT DEBUG MONITORING =====
+// ===== ENDPOINT: DEBUG MONITORING =====
 app.get("/debug/monitoring", (req, res) => {
   res.json({
     esp32Status: esp32Status,
     lastUpdate: new Date().toLocaleTimeString('id-ID'),
     fields: {
-      temperature: esp32Status.temperature,
-      freeHeap: esp32Status.freeHeap,
-      wifiRSSI: esp32Status.wifiRSSI,
-      uptime: esp32Status.uptime,
       modulesDetected: esp32Status.modulesDetected,
-      activeTeams: esp32Status.activeTeams
+      activeTeams: esp32Status.activeTeams,
+      wifiRSSI: esp32Status.wifiRSSI
     }
   });
 });
@@ -1110,7 +1044,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// ===== ROUTE UNTUK TOGGLE TIM - DIPERBAIKI =====
+// ===== ROUTE UNTUK TOGGLE TIM =====
 app.get("/toggleTeam", (req, res) => {
   const team = parseInt(req.query.team);
   const enabled = req.query.enabled === 'true';
@@ -1128,7 +1062,6 @@ app.get("/toggleTeam", (req, res) => {
     currentState: teamToggleState
   });
   
-  // PERBAIKAN: Kirim event ke SEMUA client
   io.emit("teamToggleUpdate", {
     team: team,
     enabled: enabled
@@ -1192,19 +1125,17 @@ app.get("/esp32checkin", (req, res) => {
                   action.includes('admin'));
   
   if (!isAdmin) {
-    // Parse data monitoring jika ada
-    const temp = parseFloat(req.query.temp);
-    const heap = parseInt(req.query.heap);
-    const rssi = parseInt(req.query.rssi);
-    const uptime = parseInt(req.query.uptime);
+    // Parse data monitoring
     const modules = parseInt(req.query.modules);
+    const teams = parseInt(req.query.teams);
+    const rssi = parseInt(req.query.rssi);
+    const count = parseInt(req.query.count);
     
     const data = {
-      temperature: temp,
-      heap: heap,
+      modules: modules,
+      teams: teams,
       rssi: rssi,
-      uptime: uptime,
-      modules: modules
+      count: count
     };
     
     updateESP32FromHTTP(realIP, `heartbeat_${action}`, data);
@@ -1212,8 +1143,8 @@ app.get("/esp32checkin", (req, res) => {
     logger.esp32(`ESP32 heartbeat received from ${realIP}`, {
       action: action,
       team: team,
-      temperature: temp,
-      heap: heap,
+      modules: modules,
+      teams: teams,
       rssi: rssi,
       heartbeatCount: esp32Status.heartbeatCount
     });
@@ -1238,7 +1169,7 @@ app.get("/esp32checkin", (req, res) => {
   });
 });
 
-// ===== ENDPOINT BARU: ESP32 ACTIVITY REAL-TIME =====
+// ===== ENDPOINT: ESP32 ACTIVITY =====
 app.get("/esp32activity", (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
   const activityType = req.query.type || 'activity';
@@ -1277,13 +1208,9 @@ app.get("/debug/esp32", (req, res) => {
     ip: esp32Status.ip,
     sejakAktivitasTerakhir: esp32Status.lastActivity ? 
       `${Math.floor((now - esp32Status.lastActivity) / 1000)} detik` : "N/A",
-    // PERBAIKAN: Tambah data suhu
-    suhu: esp32Status.temperature ? `${esp32Status.temperature.toFixed(1)}°C` : "Tidak ada",
-    memoriBebas: esp32Status.freeHeap ? `${Math.round(esp32Status.freeHeap / 1024)} KB` : "Tidak ada",
-    sinyalWiFi: esp32Status.wifiRSSI ? `${esp32Status.wifiRSSI} dBm` : "Tidak ada",
-    uptime: esp32Status.uptime ? `${Math.floor(esp32Status.uptime / 3600)}h ${Math.floor((esp32Status.uptime % 3600) / 60)}m` : "Tidak ada",
     modulTerdeteksi: esp32Status.modulesDetected || 0,
-    timAktif: esp32Status.activeTeams || 0
+    timAktif: esp32Status.activeTeams || 0,
+    sinyalWiFi: esp32Status.wifiRSSI || 0
   });
 });
 
@@ -1408,10 +1335,7 @@ app.get("/config", (req, res) => {
   res.json(config);
 });
 
-// PERBAIKAN: Hapus endpoint esp32status duplikat yang ada di baris ~1137-1168
-// Tetap pertahankan endpoint esp32status yang sudah diperbaiki di atas
-
-// ===== ENDPOINT BARU: TEST KONEKSI ESP32 =====
+// ===== ENDPOINT: TEST KONEKSI ESP32 =====
 app.get("/testESP32Connection", (req, res) => {
   const now = new Date();
   const timeSinceLastActivity = esp32Status.lastActivity ? 
@@ -1431,11 +1355,9 @@ app.get("/testESP32Connection", (req, res) => {
       heartbeatCount: esp32Status.heartbeatCount,
       ip: esp32Status.ip,
       sejakAktivitasTerakhir: `${timeSinceLastActivity} detik`,
-      suhu: esp32Status.temperature,
-      memoriBebas: esp32Status.freeHeap,
-      sinyalWiFi: esp32Status.wifiRSSI,
-      uptime: esp32Status.uptime,
-      modulTerdeteksi: esp32Status.modulesDetected
+      modulTerdeteksi: esp32Status.modulesDetected,
+      timAktif: esp32Status.activeTeams,
+      sinyalWiFi: esp32Status.wifiRSSI
     },
     waktuRespon: new Date().toLocaleTimeString('id-ID'),
     saran: !isRecentlyActive ? "Cek koneksi WiFi ESP32 atau restart ESP32" : null
@@ -1511,7 +1433,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ===== SOCKET.IO HANDLERS OPTIMIZED =====
+// ===== SOCKET.IO HANDLERS =====
 io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
@@ -1531,7 +1453,11 @@ io.on("connection", (socket) => {
   });
 
   if (isESP32) {
-    updateESP32Status(true, socket, clientIP, "koneksi_socket");
+    esp32Status.connected = true;
+    esp32Status.lastActivity = new Date();
+    esp32Status.socketId = socket.id;
+    esp32Status.ip = clientIP;
+    esp32Status.connectionType = "koneksi_socket";
     
     io.emit("esp32Status", esp32Status);
     
@@ -1547,17 +1473,17 @@ io.on("connection", (socket) => {
         });
       }
       
-      updateESP32Status(true, socket, clientIP, "respon_test_ping");
+      esp32Status.lastActivity = new Date();
       io.emit("esp32Status", esp32Status);
     });
     
     socket.on("esp32Heartbeat", (data) => {
-      updateESP32Status(true, socket, clientIP, "detak_jantung");
+      esp32Status.lastActivity = new Date();
       io.emit("esp32Status", esp32Status);
     });
     
     socket.on("esp32Activity", (data) => {
-      updateESP32Status(true, socket, clientIP, "aktivitas");
+      esp32Status.lastActivity = new Date();
       io.emit("esp32Status", esp32Status);
     });
   }
@@ -1617,7 +1543,8 @@ io.on("connection", (socket) => {
                      clientIP.includes('10.');
                      
     if (wasESP32) {
-      updateESP32Status(false, null, null, "socket_terputus");
+      esp32Status.connected = false;
+      esp32Status.connectionType = "socket_terputus";
       io.emit("esp32Status", esp32Status);
     }
     

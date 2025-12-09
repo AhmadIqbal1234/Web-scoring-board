@@ -334,6 +334,22 @@
   font-size: 1rem;
   color: var(--admin-text-primary);
   font-weight: 700;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.detail-value[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 1000;
+  white-space: nowrap;
+  top: -30px;
+  left: 0;
 }
 
 .controller-actions {
@@ -796,41 +812,6 @@ footer h5 {
   background: #ffa500;
 }
 
-/* ===== TEMPERATURE WARNING STYLES ===== */
-.temperature-warning {
-  animation: temperaturePulse 1s infinite;
-  font-weight: bold !important;
-}
-
-@keyframes temperaturePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-/* Detail item dengan icon */
-.detail-item {
-  position: relative;
-  padding-left: 30px;
-}
-
-.detail-item::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  background-size: contain;
-  background-repeat: no-repeat;
-}
-
-.detail-item:nth-child(1)::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234caf50'%3E%3Cpath d='M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0zm-3-9a1 1 0 0 1 1 1v7h-2V5a1 1 0 0 1 1-1z'/%3E%3C/svg%3E"); }
-.detail-item:nth-child(2)::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234caf50'%3E%3Cpath d='M20 12a8 8 0 1 0-16 0 8 8 0 0 0 16 0zm-8-6a6 6 0 1 1 0 12 6 6 0 0 1 0-12z'/%3E%3C/svg%3E"); }
-.detail-item:nth-child(3)::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%234caf50'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z'/%3E%3C/svg%3E"); }
-
-/* ===== STYLES DARI ADMIN.HTML ===== */
-
 /* ===== TOGGLE SWITCH STYLES ===== */
 .toggle-switch {
   display: flex;
@@ -896,40 +877,6 @@ footer h5 {
   display: inline-block;
 }
 
-/* Lightweight button styles for SweetAlert */
-.btn {
-  display: inline-block;
-  font-weight: 600;
-  color: #212529;
-  text-align: center;
-  vertical-align: middle;
-  user-select: none;
-  background-color: transparent;
-  border: 1px solid transparent;
-  padding: 0.45rem 0.8rem;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.btn-success {
-  background-color: #28a745;
-  color: #fff;
-  border-color: #28a745;
-}
-
-.btn-danger {
-  background-color: #dc3545;
-  color: #fff;
-  border-color: #dc3545;
-}
-
-.btn:focus {
-  outline: none;
-  box-shadow: 0 0 0 4px rgba(40,167,69,0.12);
-}
-
 /* Connection test result */
 .connection-test-result {
   display: none;
@@ -949,14 +896,6 @@ footer h5 {
   background: rgba(244, 67, 54, 0.1);
   border: 1px solid #f44336;
   color: #f44336;
-}
-
-/* ESP32 timestamp */
-#esp32Timestamp {
-  display: inline-block;
-  margin-left: 10px;
-  font-size: 0.8rem;
-  font-weight: normal;
 }
 
 /* Tombol Force Unlock */
@@ -989,14 +928,47 @@ footer h5 {
   transform: none;
 }
 
-/* Temperature warning animation */
-.temperature-warning {
-  animation: temperaturePulse 1s infinite;
+/* ===== ESP32 STATUS INDICATORS ===== */
+.detail-value[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 1000;
+  white-space: nowrap;
+  top: -30px;
+  left: 0;
 }
 
-@keyframes temperaturePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+/* Warna untuk indikator status */
+.status-excellent {
+  color: #4caf50 !important;
+}
+
+.status-good {
+  color: #8bc34a !important;
+}
+
+.status-warning {
+  color: #ff9800 !important;
+}
+
+.status-critical {
+  color: #f44336 !important;
+}
+
+/* Animasi untuk data baru */
+@keyframes dataUpdate {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.data-updated {
+  animation: dataUpdate 0.5s ease;
 }
 
 /* ===== RESPONSIVE DESIGN ===== */

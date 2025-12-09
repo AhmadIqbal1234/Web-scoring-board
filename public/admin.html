@@ -3,11 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <link rel="icon" type="image/png" href="tts/android-chrome-192x192.png">
-  <title>Admin Panel - PERBAIKAN</title>
+  <title>Admin Panel</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/admin.css" />
   <script>
-  // Force favicon load
   const favicon = document.createElement('link');
   favicon.rel = 'icon';
   favicon.href = 'tts/android-chrome-192x192.png?' + new Date().getTime();
@@ -47,7 +46,6 @@
           <small class="config-help">Timer akan otomatis mulai saat tim pertama menekan tombol</small>
         </div>
 
-        <!-- Auto Penalty Toggle -->
         <div class="config-item">
           <label class="config-label">Penalti Otomatis</label>
           <div class="toggle-switch">
@@ -77,7 +75,6 @@
             BUKA KUNCI TOMBOL
           </button>
 
-          <!-- Tombol Force Unlock All -->
           <button id="forceUnlockAll" class="btn-force-unlock">
             FORCE UNLOCK ALL (DARI TIMER)
           </button>
@@ -118,8 +115,18 @@
             </div>
             
             <div class="detail-item">
-              <span class="detail-label">Fitur:</span>
-              <span class="detail-value">12 Buzzer + 2 Jury + LED + WiFi Manager + Timer Sync</span>
+              <span class="detail-label">Modul Terdeteksi:</span>
+              <span class="detail-value" id="esp32ModulesDetected">Mengecek...</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Tim Aktif:</span>
+              <span class="detail-value" id="esp32ActiveTeams">Mengecek...</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Sinyal WiFi:</span>
+              <span class="detail-value" id="esp32WiFiRSSI">-</span>
             </div>
           </div>
         </div>
