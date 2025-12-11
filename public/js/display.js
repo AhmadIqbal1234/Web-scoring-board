@@ -1,21 +1,22 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
 const TEAM_COUNT = 12;
 
-// ===== ATOMIC LOCK STATE =====
+// ===== ATOMIC LOCK STATE DIPERBAIKI =====
 let atomicLockState = {
   locked: false,
   activeTeam: 0,
   lockTime: 0,
   lastBuzzTime: 0,
-  lockId: null
+  lockId: null,
+  lockSequence: 0
 };
 
 // ===== TEAM TOGGLE STATE MANAGEMENT =====
-let teamToggleState = Array(TEAM_COUNT).fill(true); // Status dari server
-let lastServerToggleState = Array(TEAM_COUNT).fill(true); // Untuk validasi
+let teamToggleState = Array(TEAM_COUNT).fill(true);
+let lastServerToggleState = Array(TEAM_COUNT).fill(true);
 
 // ===== PERFORMANCE OPTIMIZATION =====
 const BUTTON_COOLDOWN = 10;
@@ -27,7 +28,7 @@ let lastTimerValue = 0;
 let timerUpdateTimeout = null;
 const TIMER_UPDATE_DEBOUNCE = 30;
 
-// ===== SISTEM AUDIO FILE =====
+// ===== SISTEM AUDIO FILE DENGAN ACKNOWLEDGMENT =====
 class SistemAudioTim {
   constructor() {
     this.audioElements = new Map();
@@ -57,6 +58,9 @@ class SistemAudioTim {
     console.error(`Error audio untuk Tim ${teamLetter}:`, event.target.error);
     this.sedangMemutar = false;
     
+    // Kirim acknowledgment error ke server
+    this.sendAudioAcknowledgment(teamLetter, false, 'team');
+    
     if (this.onAudioEndCallback) {
       setTimeout(() => {
         this.executeCallback(this.onAudioEndCallback);
@@ -78,7 +82,18 @@ class SistemAudioTim {
       });
   }
 
-  putarAudio(team, onAudioEnd = null) {
+  // PERBAIKAN: Kirim audio acknowledgment ke server
+  sendAudioAcknowledgment(team, success, audioType, audioId = null) {
+    socket.emit("audioAck", {
+      audioId: audioId || `team_${team}`,
+      success: success,
+      team: team,
+      audioType: audioType,
+      timestamp: Date.now()
+    });
+  }
+
+  putarAudio(team, onAudioEnd = null, audioId = null) {
     if (this.sedangMemutar && this.audioSekarang === this.audioElements.get(team)) {
       return false;
     }
@@ -89,6 +104,9 @@ class SistemAudioTim {
 
     const audioEl = this.audioElements.get(team);
     if (!audioEl) {
+      // Kirim acknowledgment error
+      this.sendAudioAcknowledgment(team, false, 'team', audioId);
+      
       if (onAudioEnd) {
         setTimeout(() => this.executeCallback(onAudioEnd), 100);
       }
@@ -103,6 +121,9 @@ class SistemAudioTim {
       audioEl.onended = () => {
         this.sedangMemutar = false;
         
+        // Kirim acknowledgment sukses
+        this.sendAudioAcknowledgment(team, true, 'team', audioId);
+        
         if (this.onAudioEndCallback) {
           this.executeCallback(this.onAudioEndCallback);
           this.onAudioEndCallback = null;
@@ -116,7 +137,7 @@ class SistemAudioTim {
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            console.log(`[AUDIO] Memutar audio untuk Tim ${getTeamLetter(team)}`);
+            console.log(`[AUDIO] Memutar audio untuk Tim ${getTeamLetter(team)}`, { audioId });
             
             const aiMessageEl = document.getElementById("aiMessage");
             if (aiMessageEl) {
@@ -131,6 +152,10 @@ class SistemAudioTim {
           .catch(error => {
             console.error('Gagal memutar audio:', error);
             this.sedangMemutar = false;
+            
+            // Kirim acknowledgment error
+            this.sendAudioAcknowledgment(team, false, 'team', audioId);
+            
             if (onAudioEnd) {
               setTimeout(() => this.executeCallback(onAudioEnd), 100);
             }
@@ -142,6 +167,10 @@ class SistemAudioTim {
     } catch (error) {
       console.error('Exception audio:', error);
       this.sedangMemutar = false;
+      
+      // Kirim acknowledgment error
+      this.sendAudioAcknowledgment(team, false, 'team', audioId);
+      
       if (onAudioEnd) {
         setTimeout(() => this.executeCallback(onAudioEnd), 100);
       }
@@ -159,7 +188,7 @@ class SistemAudioTim {
   }
 }
 
-// Sistem Audio untuk Timer Countdown
+// Sistem Audio untuk Timer Countdown dengan Acknowledgment
 class TimerAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -183,7 +212,8 @@ class TimerAudioSystem {
     });
   }
 
-  putarAudio(audioFile) {
+  // PERBAIKAN: Tambah parameter audioId
+  putarAudio(audioFile, audioId = null) {
     if (this.sedangMemutar) {
       this.berhenti();
     }
@@ -200,7 +230,9 @@ class TimerAudioSystem {
       const playPromise = audioEl.play();
       
       if (playPromise !== undefined) {
-        playPromise.catch(error => {
+        playPromise.then(() => {
+          console.log(`[AUDIO] Memutar audio timer: ${audioFile}`, { audioId });
+        }).catch(error => {
           console.error('Gagal memutar audio timer:', error);
           this.sedangMemutar = false;
         });
@@ -228,7 +260,7 @@ class TimerAudioSystem {
   }
 }
 
-// Sistem Audio untuk Juri
+// Sistem Audio untuk Juri dengan Acknowledgment
 class JuryAudioSystem {
   constructor() {
     this.audioElements = new Map();
@@ -248,7 +280,8 @@ class JuryAudioSystem {
     });
   }
 
-  putarAudio(audioFile) {
+  // PERBAIKAN: Tambah parameter audioId
+  putarAudio(audioFile, audioId = null) {
     if (this.sedangMemutar) {
       this.berhenti();
     }
@@ -265,7 +298,9 @@ class JuryAudioSystem {
       const playPromise = audioEl.play();
       
       if (playPromise !== undefined) {
-        playPromise.catch(error => {
+        playPromise.then(() => {
+          console.log(`[AUDIO] Memutar audio juri: ${audioFile}`, { audioId });
+        }).catch(error => {
           console.error('Gagal memutar audio juri:', error);
           this.sedangMemutar = false;
         });
@@ -335,16 +370,17 @@ function checkAtomicLock(team) {
   return true;
 }
 
-function setAtomicLock(team) {
+function setAtomicLock(team, lockId = null, lockSequence = 0) {
   atomicLockState = {
     locked: true,
     activeTeam: team,
     lockTime: Date.now(),
     lastBuzzTime: Date.now(),
-    lockId: `client_lock_${Date.now()}_${team}`
+    lockId: lockId || `client_lock_${Date.now()}_${team}`,
+    lockSequence: lockSequence
   };
   
-  console.log(`[ATOMIC] Tim ${getTeamLetter(team)} atomic locked`);
+  console.log(`[ATOMIC] Tim ${getTeamLetter(team)} atomic locked`, { lockId, lockSequence });
 }
 
 function clearAtomicLock() {
@@ -353,14 +389,15 @@ function clearAtomicLock() {
     activeTeam: 0,
     lockTime: 0,
     lastBuzzTime: 0,
-    lockId: null
+    lockId: null,
+    lockSequence: 0
   };
   
   console.log('[ATOMIC] Lock cleared');
 }
 
-// ===== TAMPILKAN TIM AKTIF =====
-function showActiveTeam(team) {
+// ===== TAMPILKAN TIM AKTIF DIPERBAIKI =====
+function showActiveTeam(team, lockInfo = {}) {
   if (!team || team < 1 || team > TEAM_COUNT) return;
   
   currentActiveTeam = team;
@@ -381,6 +418,11 @@ function showActiveTeam(team) {
   const activeEl = document.getElementById("team-" + team);
   if (activeEl) {
     activeEl.classList.add("active");
+    
+    // PERBAIKAN: Tambah tooltip dengan info lock
+    if (lockInfo.lockId) {
+      activeEl.title = `Lock ID: ${lockInfo.lockId} | Sequence: ${lockInfo.lockSequence || 0}`;
+    }
   }
 }
 
@@ -389,7 +431,10 @@ function resetDisplay() {
   
   for (let i = 1; i <= TEAM_COUNT; i++) {
     const el = document.getElementById("team-" + i);
-    if (el) el.classList.remove("active", "hidden");
+    if (el) {
+      el.classList.remove("active", "hidden");
+      el.title = `Tim ${getTeamLetter(i)}`;
+    }
   }
   overlay.classList.remove("active");
 }
@@ -429,8 +474,8 @@ function updateTeamDisplay() {
   }
 }
 
-// ===== OPTIMIZED TIMER DISPLAY =====
-function updateTimerDisplayOptimized(seconds) {
+// ===== OPTIMIZED TIMER DISPLAY DIPERBAIKI =====
+function updateTimerDisplayOptimized(seconds, lockInfo = {}) {
   const timerEl = document.querySelector('.timer');
   if (!timerEl) return;
   
@@ -465,6 +510,11 @@ function updateTimerDisplayOptimized(seconds) {
         timerEl.classList.add('normal');
       }
       
+      // PERBAIKAN: Tambah tooltip dengan lock info
+      if (lockInfo.lockId) {
+        timerEl.title = `Lock ID: ${lockInfo.lockId} | Sequence: ${lockInfo.lockSequence || 0}`;
+      }
+      
       lastTimerValue = seconds;
     }
   }
@@ -476,16 +526,17 @@ function resetTimerDisplay() {
     timerEl.textContent = '00:00';
     timerEl.classList.remove('normal', 'warning', 'critical');
     timerEl.classList.add('inactive');
+    timerEl.title = '';
     lastTimerValue = 0;
   }
 }
 
-// ===== PLAY TEAM AUDIO =====
-function playTeamAudioDirectly(team) {
+// ===== PLAY TEAM AUDIO DENGAN ACKNOWLEDGMENT =====
+function playTeamAudioDirectly(team, audioId = null) {
   const audioSuccess = audioTim.putarAudio(team, {
     action: "startTimer",
     team: team
-  });
+  }, audioId);
   
   if (!audioSuccess) {
     setTimeout(() => {
@@ -505,6 +556,7 @@ function renderInitial() {
       el.innerHTML = `
         <h2>Tim ${getTeamLetter(i)}</h2>
         <div class="score" id="score-${i}">0</div>
+        <div class="lock-info" id="lock-info-${i}"></div>
       `;
       
       board.appendChild(el);
@@ -520,7 +572,7 @@ function renderInitial() {
 
 renderInitial();
 
-// ===== SOCKET EVENTS =====
+// ===== SOCKET EVENTS DIPERBAIKI =====
 socket.on("connect", () => {
   console.log('[SOCKET] Connected to server - ID: ' + socket.id);
   
@@ -528,24 +580,27 @@ socket.on("connect", () => {
   if (liveIndicator) {
     liveIndicator.style.background = '#4caf50';
     liveIndicator.textContent = '● LIVE - Terhubung ke Server';
+    liveIndicator.title = `Socket ID: ${socket.id}`;
   }
   
   loadInitialData();
 });
 
+// PERBAIKAN: Fungsi load data awal dengan state recovery
 function loadInitialData() {
   Promise.all([
     fetch('/scores').then(r => r.json()),
     fetch('/lockstate').then(r => r.json()),
     fetch('/teamToggleState').then(r => r.json()),
-    fetch('/timerstate').then(r => r.text())
+    fetch('/timerstatus').then(r => r.json()),
+    fetch('/fullstate').then(r => r.json())
   ])
-  .then(([scoresData, lockStateData, toggleStateData, timerState]) => {
+  .then(([scoresData, lockStateData, toggleStateData, timerState, fullState]) => {
     // Update scores
-    if (Array.isArray(scoresData)) {
-      for (let i = 0; i < scoresData.length; i++) {
+    if (Array.isArray(scoresData.scores)) {
+      for (let i = 0; i < scoresData.scores.length; i++) {
         const el = document.getElementById("score-" + (i + 1));
-        if (el) el.textContent = scoresData[i];
+        if (el) el.textContent = scoresData.scores[i];
       }
     }
     
@@ -555,29 +610,48 @@ function loadInitialData() {
       atomicLockState.activeTeam = lockStateData.activeTeam || 0;
       atomicLockState.lockTime = lockStateData.lockTime || 0;
       atomicLockState.lockId = lockStateData.lockId || null;
+      atomicLockState.lockSequence = lockStateData.lockSequence || 0;
       
       if (lockStateData.locked && lockStateData.activeTeam) {
-        showActiveTeam(lockStateData.activeTeam);
+        showActiveTeam(lockStateData.activeTeam, {
+          lockId: lockStateData.lockId,
+          lockSequence: lockStateData.lockSequence
+        });
       } else {
         resetDisplay();
       }
     }
     
     // PERBAIKAN: Update toggle state dengan benar
-    if (Array.isArray(toggleStateData)) {
-      teamToggleState = [...toggleStateData];
-      lastServerToggleState = [...toggleStateData];
+    if (Array.isArray(toggleStateData.toggleState)) {
+      teamToggleState = [...toggleStateData.toggleState];
+      lastServerToggleState = [...toggleStateData.toggleState];
       updateTeamDisplay(); // PASTIKAN ini dipanggil
       console.log('[INIT] Team toggle state loaded:', teamToggleState);
     }
     
-    // Sync timer
-    const time = parseInt(timerState);
-    if (!isNaN(time)) {
-      updateTimerDisplayOptimized(time);
+    // Sync timer dengan lock info
+    if (timerState) {
+      updateTimerDisplayOptimized(timerState.timeRemaining || 0, {
+        lockId: timerState.lockState?.lockId,
+        lockSequence: timerState.lockState?.lockSequence
+      });
     }
     
-    console.log('[INIT] Initial data loaded successfully');
+    // PERBAIKAN: Update lock info display
+    if (lockStateData.locked && lockStateData.activeTeam) {
+      const lockInfoEl = document.getElementById(`lock-info-${lockStateData.activeTeam}`);
+      if (lockInfoEl) {
+        lockInfoEl.textContent = `Lock: ${lockStateData.lockSequence || 0}`;
+        lockInfoEl.style.display = 'block';
+      }
+    }
+    
+    console.log('[INIT] Initial data loaded successfully', {
+      lockId: lockStateData.lockId,
+      lockSequence: lockStateData.lockSequence,
+      fullStateChecksum: fullState.checksum
+    });
   })
   .catch(err => {
     console.error('Error loading initial data:', err);
@@ -590,14 +664,15 @@ socket.on("disconnect", () => {
   if (liveIndicator) {
     liveIndicator.style.background = '#ff4444';
     liveIndicator.textContent = '● OFFLINE - DISCONNECTED';
+    liveIndicator.title = '';
   }
 });
 
-// ===== ATOMIC BUZZ EVENT - OPTIMIZED =====
-socket.on("buzz", ({ team }) => {
+// ===== ATOMIC BUZZ EVENT - OPTIMIZED DENGAN LOCK INFO =====
+socket.on("buzz", ({ team, lockId, timestamp }) => {
   const now = Date.now();
   
-  console.log(`[BUZZ] Event received for Team ${getTeamLetter(team)} at ${now}`);
+  console.log(`[BUZZ] Event received for Team ${getTeamLetter(team)} at ${now}`, { lockId });
   
   // Cooldown check
   if (now - lastButtonProcessTime < BUTTON_COOLDOWN) {
@@ -619,17 +694,21 @@ socket.on("buzz", ({ team }) => {
     return;
   }
   
-  // Set atomic lock
-  setAtomicLock(team);
+  // Set atomic lock dengan lockId dari server
+  setAtomicLock(team, lockId);
   
-  console.log(`[BUZZ] Processing buzz for Team ${getTeamLetter(team)}`);
+  console.log(`[BUZZ] Processing buzz for Team ${getTeamLetter(team)}`, { lockId });
   
   if (teamToggleState[team - 1]) {
     // Immediate visual feedback - TAMPILKAN TIM YANG MENEKAN
-    showActiveTeam(team);
+    showActiveTeam(team, { lockId });
     
-    // Audio buzzer akan diputar via event "playPreTeamAudio" dari server
-    // Audio tim akan diputar via event "playTeamAudio" setelah buzzer selesai
+    // Update lock info display
+    const lockInfoEl = document.getElementById(`lock-info-${team}`);
+    if (lockInfoEl) {
+      lockInfoEl.textContent = `Lock: ${atomicLockState.lockSequence || 0}`;
+      lockInfoEl.style.display = 'block';
+    }
   } else {
     console.log(`[BUZZ] Team ${getTeamLetter(team)} is disabled`);
   }
@@ -681,11 +760,11 @@ socket.on("teamToggleState", data => {
   }
 });
 
-// ===== EVENT PLAY PRE TEAM AUDIO (BUZZER) =====
+// ===== EVENT PLAY PRE TEAM AUDIO (BUZZER) DENGAN ACKNOWLEDGMENT =====
 socket.on("playPreTeamAudio", (data) => {
-  const { team, audioFile } = data;
+  const { team, audioFile, audioId } = data;
 
-  console.log(`[BUZZER] Memutar audio buzzer untuk Tim ${getTeamLetter(team)}`);
+  console.log(`[BUZZER] Memutar audio buzzer untuk Tim ${getTeamLetter(team)}`, { audioId });
   
   // Hentikan audio tim jika sedang diputar
   audioTim.berhenti();
@@ -694,12 +773,32 @@ socket.on("playPreTeamAudio", (data) => {
   
   buzzerAudio.onerror = (e) => {
     console.error('Error memutar buzzer audio:', e);
+    
+    // Kirim acknowledgment error
+    socket.emit("audioAck", {
+      audioId: audioId,
+      success: false,
+      team: team,
+      audioType: 'buzzer',
+      timestamp: Date.now()
+    });
+    
     // Jika gagal, beritahu server
     socket.emit("preTeamAudioFinished", { team: team });
   };
   
   buzzerAudio.onended = () => {
     console.log('[BUZZER] Buzzer selesai, lanjut ke audio tim');
+    
+    // Kirim acknowledgment sukses
+    socket.emit("audioAck", {
+      audioId: audioId,
+      success: true,
+      team: team,
+      audioType: 'buzzer',
+      timestamp: Date.now()
+    });
+    
     // Beritahu server bahwa buzzer selesai
     socket.emit("preTeamAudioFinished", { team: team });
   };
@@ -708,6 +807,16 @@ socket.on("playPreTeamAudio", (data) => {
   if (playPromise !== undefined) {
     playPromise.catch(error => {
       console.error('Gagal memutar buzzer audio:', error);
+      
+      // Kirim acknowledgment error
+      socket.emit("audioAck", {
+        audioId: audioId,
+        success: false,
+        team: team,
+        audioType: 'buzzer',
+        timestamp: Date.now()
+      });
+      
       socket.emit("preTeamAudioFinished", { team: team });
     });
   }
@@ -741,14 +850,28 @@ socket.on("reset", arr => {
   }
 });
 
-// ===== ATOMIC LOCKSTATE EVENT =====
+// ===== ATOMIC LOCKSTATE EVENT DIPERBAIKI =====
 socket.on("lockstate", state => {
   atomicLockState.locked = state.locked || false;
   atomicLockState.activeTeam = state.activeTeam || 0;
   atomicLockState.lockTime = state.lockTime || 0;
   atomicLockState.lockId = state.lockId || null;
+  atomicLockState.lockSequence = state.lockSequence || 0;
   
-  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)} (ID: ${state.lockId})` : 'Unlocked'}`);
+  console.log(`[LOCKSTATE] ${state.locked ? `Locked by Team ${getTeamLetter(state.activeTeam)} (ID: ${state.lockId}, Seq: ${state.lockSequence})` : 'Unlocked'}`);
+  
+  // Update lock info display
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const lockInfoEl = document.getElementById(`lock-info-${i}`);
+    if (lockInfoEl) {
+      if (state.locked && state.activeTeam === i) {
+        lockInfoEl.textContent = `Lock: ${state.lockSequence || 0}`;
+        lockInfoEl.style.display = 'block';
+      } else {
+        lockInfoEl.style.display = 'none';
+      }
+    }
+  }
   
   if (!state.locked) {
     resetDisplay();
@@ -756,22 +879,25 @@ socket.on("lockstate", state => {
   } else if (state.activeTeam) {
     // JANGAN reset display jika sistem terkunci
     // Hanya tampilkan tim aktif
-    showActiveTeam(state.activeTeam);
-    setAtomicLock(state.activeTeam);
+    showActiveTeam(state.activeTeam, {
+      lockId: state.lockId,
+      lockSequence: state.lockSequence
+    });
+    setAtomicLock(state.activeTeam, state.lockId, state.lockSequence);
   }
 });
 
-// PlayTeamAudio event
+// PlayTeamAudio event dengan acknowledgment
 socket.on("playTeamAudio", (data) => {
-  const { team, audioFile, timerDuration } = data;
+  const { team, audioFile, timerDuration, audioId } = data;
 
-  console.log(`[TEAM AUDIO] Memulai audio untuk Tim ${getTeamLetter(team)}`);
+  console.log(`[TEAM AUDIO] Memulai audio untuk Tim ${getTeamLetter(team)}`, { audioId });
   
   const audioSuccess = audioTim.putarAudio(team, {
     action: "startTimer",
     team: team,
     timerDuration: timerDuration
-  });
+  }, audioId);
   
   if (!audioSuccess) {
     setTimeout(() => {
@@ -781,18 +907,18 @@ socket.on("playTeamAudio", (data) => {
   }
 });
 
-// Timer Audio Events
+// Timer Audio Events dengan audioId
 socket.on("playTimerAudio", (data) => {
-  const { seconds, audioFile } = data;
-  console.log(`[TIMER AUDIO] Playing: ${audioFile} (${seconds}s)`);
-  timerAudio.putarAudio(audioFile);
+  const { seconds, audioFile, audioId } = data;
+  console.log(`[TIMER AUDIO] Playing: ${audioFile} (${seconds}s)`, { audioId });
+  timerAudio.putarAudio(audioFile, audioId);
 });
 
-// Jury Audio Events
+// Jury Audio Events dengan audioId
 socket.on("playJuryAudio", (data) => {
-  const { isCorrect, audioFile } = data;
-  console.log(`[JURY AUDIO] Playing: ${audioFile} (${isCorrect ? 'correct' : 'wrong'})`);
-  juryAudio.putarAudio(audioFile);
+  const { isCorrect, audioFile, audioId } = data;
+  console.log(`[JURY AUDIO] Playing: ${audioFile} (${isCorrect ? 'correct' : 'wrong'})`, { audioId });
+  juryAudio.putarAudio(audioFile, audioId);
   
   const aiMessageEl = document.getElementById("aiMessage");
   if (aiMessageEl) {
@@ -840,11 +966,14 @@ socket.on("aiMessage", (data) => {
   }, 3000);
 });
 
-// ===== TIMER EVENTS =====
+// ===== TIMER EVENTS DIPERBAIKI DENGAN LOCK INFO =====
 socket.on("timerStart", (data) => {
-  console.log(`[TIMER] Started: ${data.duration}s`);
+  console.log(`[TIMER] Started: ${data.duration}s`, { lockId: data.lockId });
   if (data.duration) {
-    updateTimerDisplayOptimized(data.duration);
+    updateTimerDisplayOptimized(data.duration, {
+      lockId: data.lockId,
+      lockSequence: atomicLockState.lockSequence
+    });
   }
   // JANGAN reset display saat timer dimulai
   // Biarkan tampilan tetap fokus pada tim yang aktif
@@ -857,14 +986,17 @@ socket.on("timerUpdate", (data) => {
   
   timerUpdateTimeout = setTimeout(() => {
     if (data.timeRemaining !== undefined) {
-      updateTimerDisplayOptimized(data.timeRemaining);
+      updateTimerDisplayOptimized(data.timeRemaining, {
+        lockId: data.lockId,
+        lockSequence: atomicLockState.lockSequence
+      });
     }
   }, TIMER_UPDATE_DEBOUNCE);
 });
 
-// ===== PERBAIKAN: Event timerReset JANGAN reset display jika sistem terkunci =====
-socket.on("timerReset", () => {
-  console.log('[TIMER] Reset');
+// ===== PERBAIKAN: Event timerReset dengan lock info =====
+socket.on("timerReset", (data) => {
+  console.log('[TIMER] Reset', data);
   
   if (timerUpdateTimeout) {
     clearTimeout(timerUpdateTimeout);
@@ -878,14 +1010,22 @@ socket.on("timerReset", () => {
       resetDisplay();
       clearAtomicLock();
     } else {
-      console.log('[TIMER] Sistem terkunci, tetap tampilkan tim aktif');
+      console.log('[TIMER] Sistem terkunci, tetap tampilkan tim aktif', atomicLockState);
     }
   }, TIMER_UPDATE_DEBOUNCE);
 });
 
-// ===== SYSTEM UNLOCKED EVENT =====
+// ===== SYSTEM UNLOCKED EVENT DIPERBAIKI =====
 socket.on("systemUnlocked", (data) => {
-  console.log(`[SYSTEM] System unlocked: ${data.reason}`);
+  console.log(`[SYSTEM] System unlocked: ${data.reason}`, data);
+  
+  // Clear lock info display
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const lockInfoEl = document.getElementById(`lock-info-${i}`);
+    if (lockInfoEl) {
+      lockInfoEl.style.display = 'none';
+    }
+  }
   
   clearAtomicLock();
   resetDisplay();
@@ -896,6 +1036,7 @@ socket.on("systemUnlocked", (data) => {
     timerEl.textContent = '00:00';
     timerEl.classList.remove('normal', 'warning', 'critical');
     timerEl.classList.add('inactive');
+    timerEl.title = '';
   }
   
   currentActiveTeam = 0;
@@ -919,7 +1060,10 @@ socket.on("timerStatusResponse", (data) => {
       clearAtomicLock();
     }
   } else {
-    updateTimerDisplayOptimized(data.waktuTersisa);
+    updateTimerDisplayOptimized(data.waktuTersisa, {
+      lockId: data.statusKunci.lockId,
+      lockSequence: data.statusKunci.lockSequence
+    });
   }
 });
 
@@ -934,18 +1078,66 @@ socket.on("autoPenaltyStatus", (data) => {
 
 // ===== ESP32 STATUS EVENTS =====
 socket.on("esp32Status", (status) => {
-  console.log(`[ESP32] Status: ${status.connected ? 'CONNECTED' : 'DISCONNECTED'}`);
+  console.log(`[ESP32] Status: ${status.connected ? 'CONNECTED' : 'DISCONNECTED'}`, {
+    socketId: status.socketId,
+    rssi: status.wifiRSSI
+  });
   
   const esp32Indicator = document.querySelector('.esp32-indicator');
   if (esp32Indicator) {
     if (status.connected) {
       esp32Indicator.style.background = '#4caf50';
       esp32Indicator.textContent = '● ESP32 ONLINE';
+      esp32Indicator.title = `Socket ID: ${status.socketId || 'HTTP'} | RSSI: ${status.wifiRSSI || 'N/A'} dBm`;
     } else {
       esp32Indicator.style.background = '#f44336';
       esp32Indicator.textContent = '● ESP32 OFFLINE';
+      esp32Indicator.title = '';
     }
   }
+});
+
+// PERBAIKAN: Event untuk full state sync
+socket.on("fullStateSync", (data) => {
+  console.log("[DISPLAY] Full state sync received", data);
+  
+  // Update scores
+  if (data.scores && Array.isArray(data.scores)) {
+    for (let i = 0; i < data.scores.length; i++) {
+      const el = document.getElementById("score-" + (i + 1));
+      if (el) el.textContent = data.scores[i];
+    }
+  }
+  
+  // Update lock state
+  if (data.lockState) {
+    atomicLockState.locked = data.lockState.locked || false;
+    atomicLockState.activeTeam = data.lockState.activeTeam || 0;
+    atomicLockState.lockId = data.lockState.lockId || null;
+    atomicLockState.lockSequence = data.lockState.lockSequence || 0;
+    
+    if (data.lockState.locked && data.lockState.activeTeam) {
+      showActiveTeam(data.lockState.activeTeam, {
+        lockId: data.lockState.lockId,
+        lockSequence: data.lockState.lockSequence
+      });
+    } else {
+      resetDisplay();
+    }
+  }
+  
+  // Update timer
+  if (data.timer) {
+    updateTimerDisplayOptimized(data.timer.remaining || 0, {
+      lockId: data.lockState?.lockId,
+      lockSequence: data.lockState?.lockSequence
+    });
+  }
+  
+  console.log("[DISPLAY] State sync completed", {
+    checksum: data.checksum,
+    lockId: data.lockState?.lockId
+  });
 });
 
 // Function untuk check timer status
@@ -965,12 +1157,12 @@ function debugToggleState() {
   console.log('==========================');
 }
 
-// ===== INITIALIZE =====
+// ===== INITIALIZE DIPERBAIKI =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
-  console.log('[DISPLAY] Initialized - Responsive Button Version');
-  console.log('[OPTIMIZATION] Button cooldown: 10ms, Lock threshold: 3ms');
-  console.log('[SYNC] ESP32 polling server every 1 second for timer sync');
+  console.log('[DISPLAY] Initialized - Enhanced Version 2.1.0');
+  console.log('[FEATURES] Atomic lock, state recovery, audio acknowledgment');
+  console.log('[SYNC] Full state recovery supported');
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {
@@ -981,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(() => {
       if (atomicLockState.locked) {
         const lockAge = Date.now() - atomicLockState.lockTime;
-        console.log(`[DEBUG] Atomic Lock: Team ${getTeamLetter(atomicLockState.activeTeam)} (locked ${lockAge}ms ago, ID: ${atomicLockState.lockId})`);
+        console.log(`[DEBUG] Atomic Lock: Team ${getTeamLetter(atomicLockState.activeTeam)} (locked ${lockAge}ms ago, ID: ${atomicLockState.lockId}, Seq: ${atomicLockState.lockSequence})`);
       }
       
       // Log toggle state jika perlu debug
@@ -994,4 +1186,19 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Check timer status awal
   setTimeout(checkTimerStatus, 1000);
+  
+  // PERBAIKAN: Request full state sync setiap 30 detik untuk recovery
+  setInterval(() => {
+    fetch('/fullstate')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          console.log('[DISPLAY] Periodic state sync completed', {
+            checksum: data.checksum,
+            lockId: data.lockState?.lockId
+          });
+        }
+      })
+      .catch(err => console.error('Periodic state sync error:', err));
+  }, 30000);
 });
