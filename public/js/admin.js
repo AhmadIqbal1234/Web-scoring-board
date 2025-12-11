@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -16,7 +16,7 @@ let esp32Status = {
   connectionType: null,
   activeTeams: 0,
   modulesDetected: 0,
-  wifiRSSI: 0,
+  wifiRSSI: null,
   heartbeatCount: 0
 };
 
@@ -79,74 +79,94 @@ function updateESP32Status(status) {
   
   // Update informasi jumlah tim aktif
   if (esp32ActiveTeams) {
-    if (esp32Status.activeTeams !== undefined && esp32Status.activeTeams !== null) {
+    if (esp32Status.activeTeams !== undefined && esp32Status.activeTeams !== null && esp32Status.connected) {
       esp32ActiveTeams.textContent = `${esp32Status.activeTeams} dari 12 tim`;
       
-      if (esp32Status.activeTeams === 12) {
+      // Cek apakah data masih fresh (dalam 5 detik)
+      const now = new Date();
+      const lastUpdate = esp32Status.lastActivity ? new Date(esp32Status.lastActivity) : null;
+      const isRecent = lastUpdate && (now - lastUpdate) < 5000;
+      
+      if (esp32Status.activeTeams === 12 && isRecent) {
         esp32ActiveTeams.style.color = "#4caf50";
-        esp32ActiveTeams.title = "Semua tombol tim terdeteksi";
-      } else if (esp32Status.activeTeams >= 6) {
+        esp32ActiveTeams.title = "Semua tombol tim terdeteksi (realtime)";
+      } else if (esp32Status.activeTeams >= 6 && isRecent) {
         esp32ActiveTeams.style.color = "#ff9800";
-        esp32ActiveTeams.title = "Beberapa tombol tidak terdeteksi";
-      } else if (esp32Status.activeTeams > 0) {
+        esp32ActiveTeams.title = "Beberapa tombol tidak terdeteksi (realtime)";
+      } else if (esp32Status.activeTeams > 0 && isRecent) {
         esp32ActiveTeams.style.color = "#ff9800";
-        esp32ActiveTeams.title = "Hanya sebagian tombol terdeteksi";
+        esp32ActiveTeams.title = "Hanya sebagian tombol terdeteksi (realtime)";
       } else {
-        esp32ActiveTeams.style.color = "#f44336";
-        esp32ActiveTeams.title = "Tidak ada tombol terdeteksi";
+        esp32ActiveTeams.style.color = "#ff9800";
+        esp32ActiveTeams.title = "Data monitoring mungkin tidak up-to-date";
       }
     } else {
-      esp32ActiveTeams.textContent = "Mengecek...";
+      esp32ActiveTeams.textContent = "-";
       esp32ActiveTeams.style.color = "#ff9800";
+      esp32ActiveTeams.title = "Data tidak tersedia";
     }
   }
   
   // Update informasi jumlah modul terdeteksi
   if (esp32ModulesDetected) {
-    if (esp32Status.modulesDetected !== undefined && esp32Status.modulesDetected !== null) {
+    if (esp32Status.modulesDetected !== undefined && esp32Status.modulesDetected !== null && esp32Status.connected) {
       esp32ModulesDetected.textContent = `${esp32Status.modulesDetected} dari 4 modul`;
       
-      if (esp32Status.modulesDetected === 4) {
+      // Cek apakah data masih fresh (dalam 5 detik)
+      const now = new Date();
+      const lastUpdate = esp32Status.lastActivity ? new Date(esp32Status.lastActivity) : null;
+      const isRecent = lastUpdate && (now - lastUpdate) < 5000;
+      
+      if (esp32Status.modulesDetected === 4 && isRecent) {
         esp32ModulesDetected.style.color = "#4caf50";
-        esp32ModulesDetected.title = "Semua modul PCF8574 terdeteksi";
-      } else if (esp32Status.modulesDetected >= 2) {
+        esp32ModulesDetected.title = "Semua modul PCF8574 terdeteksi (realtime)";
+      } else if (esp32Status.modulesDetected >= 2 && isRecent) {
         esp32ModulesDetected.style.color = "#ff9800";
-        esp32ModulesDetected.title = "Beberapa modul tidak terdeteksi";
-      } else if (esp32Status.modulesDetected > 0) {
+        esp32ModulesDetected.title = "Beberapa modul tidak terdeteksi (realtime)";
+      } else if (esp32Status.modulesDetected > 0 && isRecent) {
         esp32ModulesDetected.style.color = "#ff9800";
-        esp32ModulesDetected.title = "Hanya 1 modul terdeteksi";
+        esp32ModulesDetected.title = "Hanya 1 modul terdeteksi (realtime)";
       } else {
-        esp32ModulesDetected.style.color = "#f44336";
-        esp32ModulesDetected.title = "Tidak ada modul PCF8574 terdeteksi";
+        esp32ModulesDetected.style.color = "#ff9800";
+        esp32ModulesDetected.title = "Data monitoring mungkin tidak up-to-date";
       }
     } else {
-      esp32ModulesDetected.textContent = "Mengecek...";
+      esp32ModulesDetected.textContent = "-";
       esp32ModulesDetected.style.color = "#ff9800";
+      esp32ModulesDetected.title = "Data tidak tersedia";
     }
   }
   
-  // Update informasi sinyal WiFi - DIPERBAIKI
-  if (esp32WiFiRSSI && esp32Status.wifiRSSI) {
-    esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
-    
-    // Logika warna berdasarkan kekuatan sinyal yang benar
-    if (esp32Status.wifiRSSI > -60) {
-      esp32WiFiRSSI.style.color = "#4caf50"; // HIJAU untuk kuat (> -60 dBm)
-      esp32WiFiRSSI.title = "Sinyal WiFi: KUAT";
-    } else if (esp32Status.wifiRSSI > -70) {
-      esp32WiFiRSSI.style.color = "#ff9800"; // ORANGE untuk sedang (-60 s/d -70 dBm)
-      esp32WiFiRSSI.title = "Sinyal WiFi: SEDANG";
-    } else if (esp32Status.wifiRSSI > -80) {
-      esp32WiFiRSSI.style.color = "#f44336"; // MERAH untuk lemah (-70 s/d -80 dBm)
-      esp32WiFiRSSI.title = "Sinyal WiFi: LEMAH";
+  // PERBAIKAN: Update informasi sinyal WiFi
+  if (esp32WiFiRSSI) {
+    // Cek apakah ESP32 terhubung DAN ada data RSSI valid (tidak null, undefined, dan tidak 0)
+    if (esp32Status.connected && 
+        esp32Status.wifiRSSI !== undefined && 
+        esp32Status.wifiRSSI !== null && 
+        esp32Status.wifiRSSI !== 0) {
+      
+      esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
+      
+      // Logika warna berdasarkan kekuatan sinyal yang benar
+      if (esp32Status.wifiRSSI > -60) {
+        esp32WiFiRSSI.style.color = "#4caf50"; // HIJAU untuk kuat (> -60 dBm)
+        esp32WiFiRSSI.title = "Sinyal WiFi: KUAT";
+      } else if (esp32Status.wifiRSSI > -70) {
+        esp32WiFiRSSI.style.color = "#ff9800"; // ORANGE untuk sedang (-60 s/d -70 dBm)
+        esp32WiFiRSSI.title = "Sinyal WiFi: SEDANG";
+      } else if (esp32Status.wifiRSSI > -80) {
+        esp32WiFiRSSI.style.color = "#f44336"; // MERAH untuk lemah (-70 s/d -80 dBm)
+        esp32WiFiRSSI.title = "Sinyal WiFi: LEMAH";
+      } else {
+        esp32WiFiRSSI.style.color = "#d32f2f"; // MERAH TUA untuk sangat lemah (< -80 dBm)
+        esp32WiFiRSSI.title = "Sinyal WiFi: SANGAT LEMAH";
+      }
     } else {
-      esp32WiFiRSSI.style.color = "#d32f2f"; // MERAH TUA untuk sangat lemah (< -80 dBm)
-      esp32WiFiRSSI.title = "Sinyal WiFi: SANGAT LEMAH";
+      // PERBAIKAN: Tampilkan "-" jika ESP32 terputus atau RSSI tidak valid
+      esp32WiFiRSSI.textContent = "-";
+      esp32WiFiRSSI.style.color = "#ff9800";
+      esp32WiFiRSSI.title = "Data sinyal tidak tersedia";
     }
-  } else if (esp32WiFiRSSI) {
-    esp32WiFiRSSI.textContent = "-";
-    esp32WiFiRSSI.style.color = "#ff9800";
-    esp32WiFiRSSI.title = "Data sinyal belum tersedia";
   }
   
   if (esp32LastActivity && esp32Status.lastActivity) {
@@ -221,6 +241,7 @@ function updateESP32Timestamp() {
         timestampElement.style.color = "#f44336";
       }
       
+      // Auto-refresh jika mendekati timeout
       if (timeDiff > 240 && timeDiff < 300) {
         if (!document.hidden) {
           refreshESP32Status();
@@ -378,29 +399,155 @@ function initializeESP32Controls() {
 
 // ===== START ESP32 POLLING =====
 function startESP32RealTimePolling() {
-  // Polling untuk status ESP32 (10 detik)
+  // Polling untuk status ESP32 (3 detik) - lebih sering
   setInterval(() => {
     socket.emit("getESP32Status");
+  }, 3000);
+  
+  // Update timestamp setiap detik
+  setInterval(updateESP32Timestamp, 1000);
+  
+  // Auto-refresh monitoring data setiap 10 detik
+  setInterval(() => {
+    if (esp32Status.connected && document.visibilityState === 'visible') {
+      fetch('/esp32latest')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            // Update hanya jika data berbeda
+            if (data.modulesDetected !== esp32Status.modulesDetected || 
+                data.activeTeams !== esp32Status.activeTeams ||
+                data.wifiRSSI !== esp32Status.wifiRSSI) {
+              updateESP32Status(data);
+            }
+          }
+        })
+        .catch(() => {/* ignore errors */});
+    }
+  }, 10000);
+}
+
+// ===== REFRESH ESP32 DATA =====
+function refreshESP32Status() {
+  adminLogger.esp32('Manual refresh requested');
+  
+  const refreshBtn = document.getElementById("refreshESP32");
+  if (refreshBtn) {
+    const originalText = refreshBtn.innerHTML;
+    refreshBtn.disabled = true;
+    refreshBtn.innerHTML = '<span class="loading-spinner"></span> REFRESHING...';
+    refreshBtn.classList.add('loading');
     
-    // Ambil status dari endpoint
-    fetch('/esp32status')
+    // Panggil endpoint refresh di server
+    fetch('/refreshESP32')
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
       .then(data => {
         // Update status dengan data yang diterima
-        updateESP32Status({
-          lastActivity: new Date()
+        updateESP32Status(data.status);
+        showNotification("ESP32 status berhasil di-refresh", "success");
+        
+        adminLogger.esp32('Status refreshed', {
+          modules: data.status.modulesDetected,
+          teams: data.status.activeTeams,
+          rssi: data.status.wifiRSSI
         });
       })
       .catch(err => {
-        console.error('ESP32 polling error:', err);
+        adminLogger.error('ESP32 refresh failed:', err);
+        showNotification("Gagal refresh status", "error");
+        
+        // Fallback: minta status via socket
+        socket.emit("getESP32Status");
+      })
+      .finally(() => {
+        setTimeout(() => {
+          refreshBtn.disabled = false;
+          refreshBtn.innerHTML = originalText;
+          refreshBtn.classList.remove('loading');
+        }, 1000);
       });
-  }, 10000);
+  } else {
+    // Fallback jika tombol tidak ditemukan
+    socket.emit("getESP32Status");
+  }
+}
+
+// ===== TEST ESP32 CONNECTION =====
+function testESP32Connection() {
+  adminLogger.esp32('Connection test started');
   
-  // Update timestamp setiap detik
-  setInterval(updateESP32Timestamp, 1000);
+  const testBtn = document.getElementById("testESP32");
+  if (!testBtn) return;
+  
+  const originalText = testBtn.textContent;
+  
+  testBtn.disabled = true;
+  testBtn.innerHTML = '<span class="loading-spinner"></span> MENGUJI...';
+  testBtn.classList.add('loading');
+  
+  fetch('/testESP32Connection')
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status} - ${r.statusText}`);
+      return r.json();
+    })
+    .then(data => {
+      const resultDiv = document.getElementById("esp32TestResult");
+      if (resultDiv) {
+        resultDiv.style.display = 'block';
+        resultDiv.className = `connection-test-result ${data.sukses ? 'success' : 'error'}`;
+        
+        if (data.sukses) {
+          resultDiv.innerHTML = `
+            <strong>TEST BERHASIL</strong><br>
+            <small>${data.pesan}</small><br>
+            <small>Modul: ${data.detail.modulTerdeteksi || 0}, Tim: ${data.detail.timAktif || 0}, RSSI: ${data.detail.sinyalWiFi || 'N/A'} dBm</small>
+          `;
+          showNotification("ESP32 ONLINE", "success");
+          
+          // Update status dengan data terbaru
+          updateESP32Status({
+            connected: true,
+            lastActivity: new Date(),
+            ip: data.detail.ip,
+            modulesDetected: data.detail.modulTerdeteksi,
+            activeTeams: data.detail.timAktif,
+            wifiRSSI: data.detail.sinyalWiFi
+          });
+        } else {
+          resultDiv.innerHTML = `
+            <strong>TEST GAGAL</strong><br>
+            <small>${data.pesan}</small><br>
+            <small>${data.saran || ''}</small>
+          `;
+          showNotification("ESP32 OFFLINE", "error");
+          
+          // Update status sebagai offline
+          updateESP32Status({
+            connected: false,
+            lastActivity: esp32Status.lastActivity,
+            wifiRSSI: null
+          });
+        }
+        
+        setTimeout(() => {
+          resultDiv.style.display = 'none';
+        }, 10000);
+      }
+    })
+    .catch(err => {
+      adminLogger.error('Connection test failed:', err);
+      showNotification("Test gagal: " + err.message, "error");
+    })
+    .finally(() => {
+      setTimeout(() => {
+        testBtn.disabled = false;
+        testBtn.textContent = originalText;
+        testBtn.classList.remove('loading');
+      }, 1000);
+    });
 }
 
 // ===== FORCE UNLOCK ALL =====
@@ -496,106 +643,6 @@ function manualSyncWithESP32() {
         btn.disabled = false;
         btn.textContent = originalText;
         btn.classList.remove('loading');
-      }, 1000);
-    });
-}
-
-// ===== REFRESH ESP32 DATA =====
-function refreshESP32Data() {
-  adminLogger.esp32('Manual refresh requested');
-  
-  fetch('/debug/esp32')
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    })
-    .then(data => {
-      updateESP32Status({
-        connected: data.terhubung,
-        lastActivity: data.aktivitasTerakhir,
-        heartbeatCount: data.heartbeatCount,
-        socketId: data.socketId,
-        ip: data.ip,
-        modulesDetected: data.modulTerdeteksi,
-        activeTeams: data.timAktif,
-        wifiRSSI: data.sinyalWiFi ? parseInt(data.sinyalWiFi) : null
-      });
-      
-      adminLogger.esp32('Status refreshed', {
-        modules: data.modulTerdeteksi,
-        teams: data.timAktif,
-        rssi: data.sinyalWiFi
-      });
-    })
-    .catch(err => {
-      adminLogger.error('ESP32 refresh failed:', err);
-    });
-}
-
-function refreshESP32Status() {
-  refreshESP32Data();
-}
-
-function testESP32Connection() {
-  adminLogger.esp32('Connection test started');
-  
-  const testBtn = document.getElementById("testESP32");
-  const originalText = testBtn.textContent;
-  
-  testBtn.disabled = true;
-  testBtn.innerHTML = '<span class="loading-spinner"></span> MENGUJI...';
-  testBtn.classList.add('loading');
-  
-  fetch('/testESP32Connection')
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status} - ${r.statusText}`);
-      return r.json();
-    })
-    .then(data => {
-      const resultDiv = document.getElementById("esp32TestResult");
-      if (resultDiv) {
-        resultDiv.style.display = 'block';
-        resultDiv.className = `connection-test-result ${data.sukses ? 'success' : 'error'}`;
-        
-        if (data.sukses) {
-          resultDiv.innerHTML = `
-            <strong>TEST BERHASIL</strong><br>
-            <small>${data.pesan}</small><br>
-            <small>Modul: ${data.detail.modulTerdeteksi || 0}, Tim: ${data.detail.timAktif || 0}</small>
-          `;
-          showNotification("ESP32 ONLINE", "success");
-          
-          updateESP32Status({
-            connected: true,
-            lastActivity: data.detail.aktivitasTerakhir,
-            ip: data.detail.ip,
-            modulesDetected: data.detail.modulTerdeteksi,
-            activeTeams: data.detail.timAktif,
-            wifiRSSI: data.detail.sinyalWiFi
-          });
-        } else {
-          resultDiv.innerHTML = `
-            <strong>TEST GAGAL</strong><br>
-            <small>${data.pesan}</small><br>
-            <small>${data.saran || ''}</small>
-          `;
-          showNotification("ESP32 OFFLINE", "error");
-        }
-        
-        setTimeout(() => {
-          resultDiv.style.display = 'none';
-        }, 10000);
-      }
-    })
-    .catch(err => {
-      adminLogger.error('Connection test failed:', err);
-      showNotification("Test gagal", "error");
-    })
-    .finally(() => {
-      setTimeout(() => {
-        testBtn.disabled = false;
-        testBtn.textContent = originalText;
-        testBtn.classList.remove('loading');
       }, 1000);
     });
 }
