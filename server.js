@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -132,12 +132,8 @@ let esp32Status = {
   heartbeatCount: 0,
   modulesDetected: 0,
   activeTeams: 0,
-  wifiRSSI: null,
-  monitoringTimeout: null
+  wifiRSSI: 0
 };
-
-// ===== MONITORING TIMEOUT =====
-const MONITORING_TIMEOUT = 5000; // 5 detik
 
 // ===== SISTEM LOG OPTIMIZED =====
 const logger = {
@@ -470,25 +466,6 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== SISTEM MONITORING TIMEOUT =====
-function resetMonitoringData() {
-  if (esp32Status.modulesDetected !== 0 || esp32Status.activeTeams !== 0 || esp32Status.wifiRSSI !== null) {
-    logger.esp32("Reset monitoring data - tidak ada update dalam 5 detik", {
-      sebelumnya: {
-        modules: esp32Status.modulesDetected,
-        teams: esp32Status.activeTeams,
-        rssi: esp32Status.wifiRSSI
-      }
-    });
-    
-    esp32Status.modulesDetected = 0;
-    esp32Status.activeTeams = 0;
-    esp32Status.wifiRSSI = null;  // ← Set ke null, bukan 0!
-    
-    io.emit("esp32Status", esp32Status);
-  }
-}
-
 // ===== UPDATE ESP32 STATUS DARI HTTP =====
 function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   const now = Date.now();
@@ -502,29 +479,13 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   // Update data yang diperlukan: modul, tim aktif, dan RSSI
   if (data.modules !== undefined && data.modules !== null) esp32Status.modulesDetected = data.modules;
   if (data.teams !== undefined && data.teams !== null) esp32Status.activeTeams = data.teams;
-  
-  // PERBAIKAN: Hanya update RSSI jika nilainya valid (bukan 0 dan bukan null)
-  if (data.rssi !== undefined && data.rssi !== null && data.rssi !== 0) {
-    esp32Status.wifiRSSI = data.rssi;
-  } else {
-    esp32Status.wifiRSSI = null; // Set ke null jika RSSI tidak valid
-  }
+  if (data.rssi !== undefined && data.rssi !== null) esp32Status.wifiRSSI = data.rssi;
   
   // Update heartbeat count jika ada
   if (data.count !== undefined && data.count !== null) {
     esp32Status.heartbeatCount = data.count;
     esp32Status.lastHeartbeat = new Date();
   }
-  
-  // Reset monitoring timeout
-  if (esp32Status.monitoringTimeout) {
-    clearTimeout(esp32Status.monitoringTimeout);
-  }
-  
-  // Set timeout 5 detik untuk reset monitoring data
-  esp32Status.monitoringTimeout = setTimeout(() => {
-    resetMonitoringData();
-  }, MONITORING_TIMEOUT);
   
   io.emit("esp32Status", esp32Status);
   
@@ -545,37 +506,15 @@ function checkESP32Status() {
   if (esp32Status.lastActivity) {
     const timeSinceLastActivity = now - esp32Status.lastActivity.getTime();
     
-    // Timeout koneksi utama (5 menit)
     if (timeSinceLastActivity > 300000 && esp32Status.connected) {
       logger.esp32("ESP32 status timeout - marking as disconnected", {
         lastActivity: esp32Status.lastActivity,
         secondsInactive: Math.floor(timeSinceLastActivity / 1000)
       });
       
-      // PERBAIKAN: Reset semua data saat timeout
       esp32Status.connected = false;
       esp32Status.connectionType = "timeout";
-      esp32Status.modulesDetected = 0;
-      esp32Status.activeTeams = 0;
-      esp32Status.wifiRSSI = null;  // ← Set ke null!
-      
       io.emit("esp32Status", esp32Status);
-    }
-    
-    // Timeout monitoring data (5 detik)
-    if (timeSinceLastActivity > MONITORING_TIMEOUT && esp32Status.connected) {
-      if (esp32Status.modulesDetected > 0 || esp32Status.activeTeams > 0 || esp32Status.wifiRSSI !== null) {
-        logger.esp32("Monitoring data stale, resetting...", {
-          modules: esp32Status.modulesDetected,
-          teams: esp32Status.activeTeams,
-          rssi: esp32Status.wifiRSSI
-        });
-        
-        esp32Status.modulesDetected = 0;
-        esp32Status.activeTeams = 0;
-        esp32Status.wifiRSSI = null;
-        io.emit("esp32Status", esp32Status);
-      }
     }
   }
 }
@@ -750,6 +689,7 @@ function resetTimerOnly() {
     lockState: lockState
   });
 }
+
 
 // ===== ENDPOINT PING =====
 app.get("/ping", (req, res) => {
@@ -1066,47 +1006,6 @@ app.get("/esp32status", (req, res) => {
   });
 });
 
-// ===== ENDPOINT: REFRESH ESP32 DATA MANUAL =====
-app.get("/refreshESP32", (req, res) => {
-  logger.esp32("Manual refresh requested from admin");
-  
-  // Coba update dari ESP32 langsung via ping
-  if (esp32Status.ip && esp32Status.connected) {
-    // Kirim ping ke ESP32 via socket jika ada
-    if (esp32Status.socketId) {
-      io.to(esp32Status.socketId).emit("pingFromAdmin", { 
-        timestamp: new Date().toISOString(),
-        type: "manual_refresh" 
-      }, (response) => {
-        if (response) {
-          logger.esp32("ESP32 responded to manual ping", response);
-        }
-      });
-    }
-  }
-  
-  // Kembalikan status terkini
-  res.json({
-    sukses: true,
-    pesan: "Refresh request sent",
-    status: esp32Status,
-    waktu: new Date().toLocaleTimeString('id-ID')
-  });
-});
-
-// ===== ENDPOINT: GET LATEST ESP32 DATA =====
-app.get("/esp32latest", (req, res) => {
-  // Update monitoring data dari ESP32 jika memungkini
-  const clientIP = req.ip || req.connection.remoteAddress;
-  
-  // Jika request datang dari ESP32, update status
-  if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
-    updateESP32FromHTTP(clientIP, "admin_refresh");
-  }
-  
-  res.json(esp32Status);
-});
-
 // ===== ENDPOINT: DEBUG MONITORING =====
 app.get("/debug/monitoring", (req, res) => {
   res.json({
@@ -1329,7 +1228,7 @@ app.get("/debug/esp32", (req, res) => {
       `${Math.floor((now - esp32Status.lastActivity) / 1000)} detik` : "N/A",
     modulTerdeteksi: esp32Status.modulesDetected || 0,
     timAktif: esp32Status.activeTeams || 0,
-    sinyalWiFi: esp32Status.wifiRSSI || null
+    sinyalWiFi: esp32Status.wifiRSSI || 0
   });
 });
 
@@ -1585,11 +1484,6 @@ io.on("connection", (socket) => {
     esp32Status.ip = clientIP;
     esp32Status.connectionType = "koneksi_socket";
     
-    // Reset monitoring timeout
-    if (esp32Status.monitoringTimeout) {
-      clearTimeout(esp32Status.monitoringTimeout);
-    }
-    
     io.emit("esp32Status", esp32Status);
     
     socket.on("pingFromAdmin", (data, callback) => {
@@ -1681,14 +1575,8 @@ io.on("connection", (socket) => {
                      clientIP.includes('10.');
                      
     if (wasESP32) {
-      // PERBAIKAN: Reset semua data saat ESP32 disconnect
       esp32Status.connected = false;
       esp32Status.connectionType = "socket_terputus";
-      esp32Status.socketId = null;
-      esp32Status.modulesDetected = 0;
-      esp32Status.activeTeams = 0;
-      esp32Status.wifiRSSI = null;  // ← Set ke null!
-      
       io.emit("esp32Status", esp32Status);
     }
     
@@ -1697,7 +1585,7 @@ io.on("connection", (socket) => {
 });
 
 // ===== MONITORING ESP32 =====
-setInterval(checkESP32Status, 2000); // Cek setiap 2 detik
+setInterval(checkESP32Status, 60000);
 
 // ===== MEMULAI SERVER =====
 async function startServer() {
