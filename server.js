@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,8 +17,35 @@ const http = createServer(app);
 
 // ===== KONFIGURASI LINGKUNGAN =====
 const PORT = process.env.PORT || 8080;
+const WS_PORT = process.env.WS_PORT || 8081;
 const TEAM_COUNT = 12;
 const isProduction = process.env.NODE_ENV === 'production';
+
+// ===== WEBSOCKET SERVER UNTUK ESP32 =====
+const wss = new WebSocketServer({ 
+  port: WS_PORT,
+  clientTracking: true,
+  perMessageDeflate: {
+    zlibDeflateOptions: {
+      chunkSize: 1024,
+      memLevel: 7,
+      level: 3
+    },
+    zlibInflateOptions: {
+      chunkSize: 10 * 1024
+    },
+    clientNoContextTakeover: true,
+    serverNoContextTakeover: true,
+    serverMaxWindowBits: 10,
+    concurrencyLimit: 10,
+    threshold: 1024
+  }
+});
+
+// State untuk koneksi WebSocket ESP32
+let esp32WebSocket = null;
+let esp32WebSocketId = null;
+let lastESP32Heartbeat = null;
 
 // ===== PENGAMANAN =====
 app.use(helmet({
@@ -97,11 +125,7 @@ const io = new Server(http, {
     methods: ["GET", "POST"]
   },
   pingTimeout: 60000,
-  pingInterval: 25000,
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,
-    skipMiddlewares: true
-  }
+  pingInterval: 25000
 });
 
 // ===== DATA STATE DENGAN ATOMIC LOCK =====
@@ -112,7 +136,7 @@ let lockState = {
   activeTeam: null,
   lockTime: null,
   lockId: null,
-  lockSequence: 0  // Ditambahkan: sequence number untuk atomic lock
+  lockSequence: 0
 };
 let teamToggleState = Array(TEAM_COUNT).fill(true);
 let isAutoPenaltyEnabled = true;
@@ -137,9 +161,7 @@ let esp32Status = {
   heartbeatCount: 0,
   modulesDetected: 0,
   activeTeams: 0,
-  wifiRSSI: 0,
-  lastRSSIUpdate: null,  // Ditambahkan: timestamp RSSI
-  rssiHistory: []        // Ditambahkan: history RSSI untuk monitoring
+  wifiRSSI: 0
 };
 
 // ===== SISTEM LOG OPTIMIZED =====
@@ -169,6 +191,11 @@ const logger = {
     console.log(`[${timestamp}] LOCK: ${message}`, data ? JSON.stringify(data, null, 2) : '');
   },
   
+  websocket: (message, data = null) => {
+    const timestamp = new Date().toLocaleTimeString('id-ID');
+    console.log(`[${timestamp}] WEBSOCKET: ${message}`, data ? JSON.stringify(data, null, 2) : '');
+  },
+  
   performance: (message, data = null) => {
     if (!isProduction) {
       const timestamp = new Date().toLocaleTimeString('id-ID');
@@ -177,7 +204,7 @@ const logger = {
   }
 };
 
-// ===== SISTEM AUDIO DENGAN ACKNOWLEDGMENT =====
+// ===== SISTEM AUDIO =====
 class TimerAudioSystem {
   constructor() {
     this.audioFiles = {
@@ -200,56 +227,35 @@ class TimerAudioSystem {
     this.preTeamAudio = 'buzzer.mp3';
   }
 
-  playCountdownAudio(seconds, callback = null) {
+  playCountdownAudio(seconds) {
     const audioFile = this.audioFiles[seconds];
     if (audioFile) {
       io.emit("playTimerAudio", {
         seconds: seconds,
-        audioFile: audioFile,
-        audioId: `countdown_${Date.now()}_${seconds}`
+        audioFile: audioFile
       });
-      
-      logger.audio(`Memutar countdown audio: ${audioFile}`, { audioId: seconds });
-      
-      // Jika ada callback, eksekusi setelah delay (simulasi audio selesai)
-      if (callback) {
-        setTimeout(callback, 1000);
-      }
+      logger.audio(`Memutar countdown audio: ${audioFile}`);
     }
   }
 
-  playJuryAudio(isCorrect, callback = null) {
+  playJuryAudio(isCorrect) {
     const audioFile = isCorrect ? this.juryAudio.correct : this.juryAudio.wrong;
     if (audioFile) {
-      const audioId = `jury_${Date.now()}_${isCorrect ? 'correct' : 'wrong'}`;
       io.emit("playJuryAudio", {
         isCorrect: isCorrect,
-        audioFile: audioFile,
-        audioId: audioId
+        audioFile: audioFile
       });
-      
-      logger.audio(`Memutar audio juri: ${audioFile}`, { audioId: audioId });
-      
-      if (callback) {
-        setTimeout(callback, 800);
-      }
+      logger.audio(`Memutar audio juri: ${audioFile}`);
     }
   }
 
-  playPreTeamAudio(team, callback = null) {
+  playPreTeamAudio(team) {
     if (this.preTeamAudio) {
-      const audioId = `preteam_${Date.now()}_${team}`;
       io.emit("playPreTeamAudio", {
         team: team,
-        audioFile: this.preTeamAudio,
-        audioId: audioId
+        audioFile: this.preTeamAudio
       });
-      
-      logger.audio(`Memutar buzzer untuk Tim ${getTeamLetter(team)}`, { audioId: audioId });
-      
-      if (callback) {
-        setTimeout(callback, 500); // Buzzer biasanya pendek
-      }
+      logger.audio(`Memutar buzzer untuk Tim ${getTeamLetter(team)}`);
       return true;
     }
     return false;
@@ -292,54 +298,48 @@ function generateFeedbackMessage(team, isCorrect, points) {
   }
 }
 
-// ===== ATOMIC LOCK FUNCTIONS DIPERBAIKI =====
+// ===== ATOMIC LOCK FUNCTIONS =====
 function acquireAtomicLock(team) {
   const now = Date.now();
-  const lockThreshold = 50; // DITINGKATKAN dari 10ms ke 50ms
+  const lockThreshold = 10;
   
   if (lockState.locked) {
     const lockAge = now - (lockState.lockTime || now);
     
-    // PERBAIKAN: Validasi lock sequence
     if (lockAge < lockThreshold) {
-      logger.lock(`Lock DITOLAK - Tim ${getTeamLetter(team)} terlambat ${lockAge}ms (threshold: ${lockThreshold}ms)`);
-      return { success: false, reason: 'lock_too_new', lockAge };
+      logger.lock(`Lock DITOLAK - Tim ${getTeamLetter(team)} terlambat ${lockAge}ms`);
+      return false;
     }
     
     if (lockState.activeTeam !== team) {
       logger.lock(`Lock DENIED untuk Tim ${getTeamLetter(team)} - sudah terkunci oleh Tim ${getTeamLetter(lockState.activeTeam)} (${lockAge}ms yang lalu)`);
-      return { success: false, reason: 'already_locked', lockedBy: lockState.activeTeam, lockAge };
+      return false;
     }
     
-    if (lockAge < 100) {
+    if (lockAge < 50) {
       logger.lock(`Duplikat buzz dari Tim ${getTeamLetter(team)} diabaikan`);
-      return { success: false, reason: 'duplicate', lockAge };
+      return false;
     }
   }
   
-  // PERBAIKAN: Tambah sequence number untuk tracking
-  lockState.lockSequence++;
   lockState = { 
     locked: true, 
     activeTeam: team,
     lockTime: now,
-    lockId: `lock_${now}_${lockState.lockSequence}_${team}_${Math.random().toString(36).substr(2, 9)}`,
-    lockSequence: lockState.lockSequence
+    lockId: `lock_${now}_${team}_${Math.random().toString(36).substr(2, 9)}`,
+    lockSequence: lockState.lockSequence + 1
   };
   
-  logger.lock(`Lock ACQUIRED untuk Tim ${getTeamLetter(team)}`, {
+  logger.lock(`Lock ACQUIRED untuk Tim ${getTeamLetter(team)} pada ${now}`, {
     lockId: lockState.lockId,
-    timestamp: now,
-    sequence: lockState.lockSequence
+    lockSequence: lockState.lockSequence,
+    timestamp: now
   });
-  
-  return { success: true, lockId: lockState.lockId, sequence: lockState.lockSequence };
+  return true;
 }
 
 function releaseAtomicLock() {
   const previousActive = lockState.activeTeam;
-  const previousLockId = lockState.lockId;
-  
   lockState = { 
     locked: false, 
     activeTeam: null,
@@ -347,11 +347,448 @@ function releaseAtomicLock() {
     lockId: null,
     lockSequence: lockState.lockSequence // Pertahankan sequence
   };
+  logger.lock(`Lock RELEASED (previous active: ${previousActive ? getTeamLetter(previousActive) : 'none'})`);
+}
+
+// ===== WEBSOCKET HANDLER UNTUK ESP32 =====
+wss.on('connection', function connection(ws, req) {
+  const clientIP = req.socket.remoteAddress;
+  const socketId = `ws_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  logger.lock(`Lock RELEASED`, {
-    previousActive: previousActive ? getTeamLetter(previousActive) : 'none',
-    previousLockId: previousLockId
+  logger.websocket(`ESP32 connected: ${socketId} from ${clientIP}`);
+  
+  // Simpan koneksi ESP32
+  esp32WebSocket = ws;
+  esp32WebSocketId = socketId;
+  lastESP32Heartbeat = Date.now();
+  
+  // Update ESP32 status
+  esp32Status.connected = true;
+  esp32Status.lastActivity = new Date();
+  esp32Status.socketId = socketId;
+  esp32Status.ip = clientIP;
+  esp32Status.connectionType = "websocket";
+  
+  // Kirim status ke semua client Socket.IO
+  io.emit("esp32Status", esp32Status);
+  
+  // Send welcome message
+  const welcomeMsg = Buffer.from([
+    0x05, // MSG_SYSTEM_STATUS
+    0x01, // Connected
+    0x0C, // 12 teams
+    0x04, // 4 modules
+    config.timerDuration, // Timer duration
+    lockState.locked ? lockState.activeTeam : 0x00, // Active team if locked
+    0x00, // Reserved
+    0x00  // Reserved
+  ]);
+  
+  ws.send(welcomeMsg);
+  
+  // Send current configuration
+  sendConfigToESP32();
+  
+  // Send current lock state
+  sendLockStateToESP32();
+  
+  // Send all scores
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    sendScoreUpdateToESP32(i, scores[i-1]);
+  }
+  
+  // Handle incoming binary messages
+  ws.on('message', function message(data) {
+    lastESP32Heartbeat = Date.now();
+    
+    if (data instanceof Buffer) {
+      handleESP32BinaryMessage(data, socketId, clientIP);
+    } else {
+      logger.websocket(`Received non-binary message: ${data}`);
+    }
   });
+  
+  ws.on('error', function error(err) {
+    logger.error(`WebSocket error from ${socketId}:`, err);
+  });
+  
+  ws.on('close', function close() {
+    logger.websocket(`ESP32 disconnected: ${socketId}`);
+    
+    // Reset ESP32 status
+    esp32WebSocket = null;
+    esp32WebSocketId = null;
+    
+    esp32Status.connected = false;
+    esp32Status.connectionType = "websocket_disconnected";
+    io.emit("esp32Status", esp32Status);
+    
+    logger.esp32(`ESP32 WebSocket disconnected: ${socketId}`);
+  });
+});
+
+// ===== HANDLE ESP32 BINARY MESSAGES =====
+function handleESP32BinaryMessage(buffer, socketId, clientIP) {
+  if (buffer.length < 1) return;
+  
+  const msgType = buffer[0];
+  
+  switch(msgType) {
+    case 0x01: // MSG_BUTTON_PRESS
+      handleESP32ButtonPress(buffer, socketId, clientIP);
+      break;
+      
+    case 0x02: // MSG_HEARTBEAT
+      handleESP32Heartbeat(buffer, socketId, clientIP);
+      break;
+      
+    case 0x03: // MSG_MODULE_STATUS
+      handleESP32ModuleStatus(buffer, socketId, clientIP);
+      break;
+      
+    case 0x04: // MSG_JURY_ACTION
+      handleESP32JuryAction(buffer, socketId, clientIP);
+      break;
+      
+    case 0x05: // MSG_SYSTEM_STATUS
+      // Just acknowledge
+      logger.esp32(`ESP32 system status received from ${socketId}`);
+      break;
+      
+    default:
+      logger.websocket(`Unknown message type: 0x${msgType.toString(16).padStart(2, '0')}`);
+  }
+}
+
+// ===== HANDLE ESP32 BUTTON PRESS =====
+function handleESP32ButtonPress(buffer, socketId, clientIP) {
+  if (buffer.length < 14) return;
+  
+  const team = buffer[1];
+  const timestamp = (buffer[2] << 24) | (buffer[3] << 16) | (buffer[4] << 8) | buffer[5];
+  const sequence = (buffer[6] << 8) | buffer[7];
+  const modulesDetected = buffer[8];
+  const activeTeams = buffer[9];
+  const rssi = (buffer[10] << 8) | buffer[11];
+  
+  // Update ESP32 status
+  esp32Status.modulesDetected = modulesDetected;
+  esp32Status.activeTeams = activeTeams;
+  esp32Status.wifiRSSI = rssi;
+  esp32Status.lastActivity = new Date();
+  esp32Status.lastHeartbeat = new Date();
+  esp32Status.heartbeatCount++;
+  
+  logger.esp32(`ESP32 button press: Team ${team}, Seq ${sequence}`, {
+    timestamp: timestamp,
+    modules: modulesDetected,
+    teams: activeTeams,
+    rssi: rssi,
+    socketId: socketId
+  });
+  
+  // Cek jika tim diaktifkan
+  if (!teamToggleState[team - 1]) {
+    logger.info(`ESP32: Team ${getTeamLetter(team)} is disabled, ignoring press`);
+    
+    // Kirim MSG_LOCK_DENIED ke ESP32
+    const deniedMsg = Buffer.from([
+      0x82, // MSG_LOCK_DENIED
+      team,
+      0xE1, // ERR_TEAM_DISABLED
+      lockState.activeTeam || 0x00,
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00  // Reserved
+    ]);
+    
+    if (esp32WebSocket) {
+      esp32WebSocket.send(deniedMsg);
+    }
+    
+    return;
+  }
+  
+  // Coba acquire lock atomic
+  if (acquireAtomicLock(team)) {
+    logger.lock(`ESP32: Lock acquired for Team ${getTeamLetter(team)}`);
+    
+    // Kirim MSG_LOCK_ACQUIRED ke ESP32
+    const lockTimestamp = lockState.lockTime || Date.now();
+    const lockSequence = lockState.lockSequence;
+    
+    const acquiredMsg = Buffer.from([
+      0x81, // MSG_LOCK_ACQUIRED
+      team,
+      (lockTimestamp >> 24) & 0xFF,
+      (lockTimestamp >> 16) & 0xFF,
+      (lockTimestamp >> 8) & 0xFF,
+      lockTimestamp & 0xFF,
+      (lockSequence >> 8) & 0xFF,
+      lockSequence & 0xFF,
+      config.timerDuration
+    ]);
+    
+    if (esp32WebSocket) {
+      esp32WebSocket.send(acquiredMsg);
+    }
+    
+    // Kirim event buzz ke client Socket.IO
+    io.emit("buzz", { 
+      team, 
+      lockId: lockState.lockId,
+      lockSequence: lockSequence,
+      timestamp: lockTimestamp 
+    });
+    
+    // Update lock state display
+    io.emit("lockstate", lockState);
+    
+    // Mainkan buzzer dan audio tim
+    playBuzzerThenTeamAudio(team);
+    
+  } else {
+    // Kirim MSG_LOCK_DENIED ke ESP32
+    const deniedMsg = Buffer.from([
+      0x82, // MSG_LOCK_DENIED
+      team,
+      0xE3, // ERR_SYSTEM_LOCKED
+      lockState.activeTeam || 0x00,
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00  // Reserved
+    ]);
+    
+    if (esp32WebSocket) {
+      esp32WebSocket.send(deniedMsg);
+    }
+    
+    logger.lock(`ESP32: Lock denied for Team ${getTeamLetter(team)} - system locked by Team ${getTeamLetter(lockState.activeTeam)}`);
+  }
+}
+
+// ===== HANDLE ESP32 HEARTBEAT =====
+function handleESP32Heartbeat(buffer, socketId, clientIP) {
+  if (buffer.length < 16) return;
+  
+  const modulesDetected = buffer[1];
+  const activeTeams = buffer[2];
+  const rssi = (buffer[3] << 8) | buffer[4];
+  const heap = (buffer[5] << 24) | (buffer[6] << 16) | (buffer[7] << 8) | buffer[8];
+  const uptime = (buffer[9] << 24) | (buffer[10] << 16) | (buffer[11] << 8) | buffer[12];
+  const lockStatus = buffer[13];
+  const lockedTeam = buffer[14];
+  
+  // Update ESP32 status
+  esp32Status.modulesDetected = modulesDetected;
+  esp32Status.activeTeams = activeTeams;
+  esp32Status.wifiRSSI = rssi;
+  esp32Status.lastActivity = new Date();
+  esp32Status.lastHeartbeat = new Date();
+  esp32Status.heartbeatCount++;
+  
+  // Jika lock status tidak sync, kirim update
+  if (lockState.locked !== (lockStatus === 1) || 
+      lockState.activeTeam !== lockedTeam) {
+    sendLockStateToESP32();
+  }
+  
+  logger.esp32(`ESP32 heartbeat received`, {
+    modules: modulesDetected,
+    teams: activeTeams,
+    rssi: rssi,
+    heap: heap,
+    uptime: uptime,
+    lockStatus: lockStatus,
+    lockedTeam: lockedTeam
+  });
+  
+  // Update semua client
+  io.emit("esp32Status", esp32Status);
+}
+
+// ===== HANDLE ESP32 MODULE STATUS =====
+function handleESP32ModuleStatus(buffer, socketId, clientIP) {
+  if (buffer.length < 3) return;
+  
+  const modulesDetected = buffer[1];
+  const activeTeams = buffer[2];
+  
+  esp32Status.modulesDetected = modulesDetected;
+  esp32Status.activeTeams = activeTeams;
+  esp32Status.lastActivity = new Date();
+  
+  logger.esp32(`ESP32 module status update`, {
+    modules: modulesDetected,
+    teams: activeTeams
+  });
+  
+  io.emit("esp32Status", esp32Status);
+}
+
+// ===== HANDLE ESP32 JURY ACTION =====
+function handleESP32JuryAction(buffer, socketId, clientIP) {
+  if (buffer.length < 9) return;
+  
+  const team = buffer[1];
+  const isCorrect = buffer[2] === 1;
+  const points = (buffer[3] << 8) | buffer[4];
+  const timestamp = (buffer[5] << 24) | (buffer[6] << 16) | (buffer[7] << 8) | buffer[8];
+  
+  logger.esp32(`ESP32 jury action: Team ${team}, ${isCorrect ? 'Correct' : 'Wrong'}, ${points} points`);
+  
+  // Update score
+  scores[team - 1] += points;
+  
+  // Kirim update ke client
+  io.emit("update", { team, score: scores[team - 1] });
+  io.emit("scoring", { team, isCorrect });
+  
+  // Mainkan audio juri
+  timerAudio.playJuryAudio(isCorrect);
+  
+  // Berikan feedback
+  const feedbackMessage = generateFeedbackMessage(team, isCorrect, points);
+  io.emit("aiMessage", {
+    message: feedbackMessage,
+    type: isCorrect ? "success" : "penalty",
+    shouldSpeak: false
+  });
+  
+  // Release lock dan reset timer
+  releaseAtomicLock();
+  resetTimer();
+  
+  // Kirim update ke ESP32
+  sendLockStateToESP32();
+  sendScoreUpdateToESP32(team, scores[team - 1]);
+  
+  io.emit("lockstate", lockState);
+}
+
+// ===== SEND CONFIG TO ESP32 =====
+function sendConfigToESP32() {
+  if (!esp32WebSocket) return;
+  
+  const configMsg = Buffer.from([
+    0x86, // MSG_CONFIG_UPDATE
+    config.plus,
+    config.minus < 0 ? (256 + config.minus) : config.minus, // Convert negative to byte
+    config.timerDuration,
+    isAutoPenaltyEnabled ? 0x01 : 0x00,
+    0x00, // Reserved
+    0x00  // Reserved
+  ]);
+  
+  esp32WebSocket.send(configMsg);
+  logger.websocket("Configuration sent to ESP32");
+}
+
+// ===== SEND LOCK STATE TO ESP32 =====
+function sendLockStateToESP32() {
+  if (!esp32WebSocket) return;
+  
+  if (lockState.locked) {
+    const lockTimestamp = lockState.lockTime || Date.now();
+    const lockMsg = Buffer.from([
+      0x81, // MSG_LOCK_ACQUIRED
+      lockState.activeTeam,
+      (lockTimestamp >> 24) & 0xFF,
+      (lockTimestamp >> 16) & 0xFF,
+      (lockTimestamp >> 8) & 0xFF,
+      lockTimestamp & 0xFF,
+      (lockState.lockSequence >> 8) & 0xFF,
+      lockState.lockSequence & 0xFF,
+      config.timerDuration
+    ]);
+    
+    esp32WebSocket.send(lockMsg);
+    logger.websocket(`Lock state sent to ESP32: Team ${getTeamLetter(lockState.activeTeam)} acquired`);
+  } else {
+    const unlockMsg = Buffer.from([
+      0x83, // MSG_LOCK_RELEASED
+      0x00, // Reason
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00, // Reserved
+      0x00  // Reserved
+    ]);
+    
+    esp32WebSocket.send(unlockMsg);
+    logger.websocket("Lock released sent to ESP32");
+  }
+}
+
+// ===== SEND FORCE UNLOCK TO ESP32 =====
+function sendForceUnlockToESP32() {
+  if (!esp32WebSocket) return;
+  
+  const forceUnlockMsg = Buffer.from([
+    0x85, // MSG_FORCE_UNLOCK
+    0x00, // Reason
+    0x00, // Reserved
+    0x00, // Reserved
+    0x00, // Reserved
+    0x00, // Reserved
+    0x00, // Reserved
+    0x00  // Reserved
+  ]);
+  
+  esp32WebSocket.send(forceUnlockMsg);
+  logger.websocket("Force unlock command sent to ESP32");
+}
+
+// ===== SEND SCORE UPDATE TO ESP32 =====
+function sendScoreUpdateToESP32(team, score) {
+  if (!esp32WebSocket) return;
+  
+  const scoreMsg = Buffer.from([
+    0x88, // MSG_SCORE_UPDATE
+    team,
+    (score >> 24) & 0xFF,
+    (score >> 16) & 0xFF,
+    (score >> 8) & 0xFF,
+    score & 0xFF,
+    0x00, // Reserved
+    0x00  // Reserved
+  ]);
+  
+  esp32WebSocket.send(scoreMsg);
+  logger.websocket(`Score update sent to ESP32: Team ${getTeamLetter(team)} = ${score}`);
+}
+
+// ===== MONITOR ESP32 WEBSOCKET CONNECTION =====
+function monitorESP32WebSocket() {
+  const now = Date.now();
+  
+  if (esp32WebSocket && lastESP32Heartbeat) {
+    const timeSinceHeartbeat = now - lastESP32Heartbeat;
+    
+    if (timeSinceHeartbeat > 30000) { // 30 seconds timeout
+      logger.esp32("ESP32 WebSocket heartbeat timeout", {
+        lastHeartbeat: lastESP32Heartbeat,
+        secondsSince: Math.floor(timeSinceHeartbeat / 1000)
+      });
+      
+      // Close the connection
+      try {
+        esp32WebSocket.close();
+      } catch (err) {
+        logger.error("Error closing ESP32 WebSocket:", err);
+      }
+      
+      esp32WebSocket = null;
+      esp32WebSocketId = null;
+      
+      esp32Status.connected = false;
+      esp32Status.connectionType = "websocket_timeout";
+      io.emit("esp32Status", esp32Status);
+    }
+  }
 }
 
 // ===== SISTEM PENALTI OTOMATIS =====
@@ -387,7 +824,6 @@ function handleAutoPenalty() {
   });
   
   const previousActiveTeam = lockState.activeTeam;
-  const previousLockId = lockState.lockId;
   releaseAtomicLock();
   
   isTimerRunning = false;
@@ -401,10 +837,11 @@ function handleAutoPenalty() {
   setImmediate(() => {
     io.emit("lockstate", lockState);
     io.emit("timerReset");
-    io.emit("systemUnlocked", { 
-      reason: "auto_penalty_applied",
-      previousLockId: previousLockId
-    });
+    io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
+    
+    // Kirim ke ESP32
+    sendLockStateToESP32();
+    sendScoreUpdateToESP32(activeTeam, scores[activeTeam - 1]);
     
     const feedbackMessage = `Waktu habis! Tim ${getTeamLetter(activeTeam)} tidak menjawab, dikurangi ${Math.abs(penaltyPoints)} poin!`;
     
@@ -415,12 +852,10 @@ function handleAutoPenalty() {
     });
   });
   
-  logger.info(`AUTO PENALTI diterapkan`, {
-    tim: getTeamLetter(activeTeam),
+  logger.info(`AUTO PENALTI: Tim ${getTeamLetter(activeTeam)} -${Math.abs(penaltyPoints)} poin`, {
     poinPenalti: penaltyPoints,
     skorSebelum: previousScore,
-    skorSekarang: scores[activeTeam - 1],
-    lockIdSebelum: previousLockId
+    skorSekarang: scores[activeTeam - 1]
   });
 }
 
@@ -438,23 +873,21 @@ function unlockSystemOnTimerEnd() {
   
   if (lockState.locked) {
     const previousActiveTeam = lockState.activeTeam;
-    const previousLockId = lockState.lockId;
     releaseAtomicLock();
+    
+    // Kirim ke ESP32
+    sendLockStateToESP32();
     
     setImmediate(() => {
       io.emit("lockstate", lockState);
       io.emit("timerReset");
       io.emit("systemUnlocked", { 
         reason: "timer_expired",
-        previousActiveTeam: previousActiveTeam,
-        previousLockId: previousLockId
+        previousActiveTeam: previousActiveTeam 
       });
     });
     
-    logger.info(`Sistem dibuka karena timer habis`, {
-      timSebelum: previousActiveTeam ? getTeamLetter(previousActiveTeam) : 'none',
-      lockIdSebelum: previousLockId
-    });
+    logger.info(`Sistem dibuka karena timer habis. Tim sebelumnya: ${previousActiveTeam}`);
   }
 }
 
@@ -518,7 +951,7 @@ function validateAudioFiles() {
   return audioDirFound;
 }
 
-// ===== UPDATE ESP32 STATUS DENGAN MONITORING RSSI =====
+// ===== UPDATE ESP32 STATUS DARI HTTP =====
 function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   const now = Date.now();
   
@@ -531,40 +964,12 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   // Update data yang diperlukan: modul, tim aktif, dan RSSI
   if (data.modules !== undefined && data.modules !== null) esp32Status.modulesDetected = data.modules;
   if (data.teams !== undefined && data.teams !== null) esp32Status.activeTeams = data.teams;
-  
-  // PERBAIKAN: Update RSSI dengan timestamp
-  if (data.rssi !== undefined && data.rssi !== null) {
-    esp32Status.wifiRSSI = data.rssi;
-    esp32Status.lastRSSIUpdate = new Date();
-    
-    // Simpan history RSSI (max 10 entri)
-    esp32Status.rssiHistory.push({
-      rssi: data.rssi,
-      timestamp: new Date(),
-      activityType: activityType
-    });
-    
-    if (esp32Status.rssiHistory.length > 10) {
-      esp32Status.rssiHistory = esp32Status.rssiHistory.slice(-10);
-    }
-  }
+  if (data.rssi !== undefined && data.rssi !== null) esp32Status.wifiRSSI = data.rssi;
   
   // Update heartbeat count jika ada
   if (data.count !== undefined && data.count !== null) {
     esp32Status.heartbeatCount = data.count;
     esp32Status.lastHeartbeat = new Date();
-  }
-  
-  // PERBAIKAN: Kirim notifikasi jika RSSI buruk
-  if (esp32Status.wifiRSSI < -80) {
-    logger.esp32(`PERINGATAN: Sinyal WiFi lemah: ${esp32Status.wifiRSSI} dBm`);
-    
-    // Kirim notifikasi ke admin
-    io.to('admin').emit('esp32Warning', {
-      type: 'weak_signal',
-      rssi: esp32Status.wifiRSSI,
-      message: `Sinyal WiFi ESP32 lemah: ${esp32Status.wifiRSSI} dBm`
-    });
   }
   
   io.emit("esp32Status", esp32Status);
@@ -574,8 +979,7 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
     modules: esp32Status.modulesDetected,
     teams: esp32Status.activeTeams,
     rssi: esp32Status.wifiRSSI,
-    heartbeatCount: esp32Status.heartbeatCount,
-    rssiHistory: esp32Status.rssiHistory.length
+    heartbeatCount: esp32Status.heartbeatCount
   });
   
   return esp32Status;
@@ -590,25 +994,17 @@ function checkESP32Status() {
     if (timeSinceLastActivity > 300000 && esp32Status.connected) {
       logger.esp32("ESP32 status timeout - marking as disconnected", {
         lastActivity: esp32Status.lastActivity,
-        secondsInactive: Math.floor(timeSinceLastActivity / 1000),
-        lastRSSI: esp32Status.wifiRSSI
+        secondsInactive: Math.floor(timeSinceLastActivity / 1000)
       });
       
       esp32Status.connected = false;
       esp32Status.connectionType = "timeout";
       io.emit("esp32Status", esp32Status);
-      
-      // Kirim notifikasi ke admin
-      io.to('admin').emit('esp32Warning', {
-        type: 'timeout',
-        message: `ESP32 tidak aktif selama ${Math.floor(timeSinceLastActivity / 1000)} detik`,
-        lastActivity: esp32Status.lastActivity
-      });
     }
   }
 }
 
-// ===== SISTEM TIMER DIPERBAIKI =====
+// ===== SISTEM TIMER =====
 function startTimer(activeTeam = null) {
   if (isTimerRunning) {
     logger.performance("Timer sudah berjalan, abaikan", {
@@ -625,15 +1021,14 @@ function startTimer(activeTeam = null) {
   io.emit("timerStart", { 
     duration: config.timerDuration,
     lockId: lockState.lockId,
-    startTime: Date.now()
+    lockSequence: lockState.lockSequence
   });
   lastTimerEvent = 'timerStart';
   
   logger.performance("Timer dimulai", { 
     waktuTersisa: timeRemaining, 
     timAktif: currentActiveTeam,
-    hurufTim: getTeamLetter(currentActiveTeam),
-    lockId: lockState.lockId
+    hurufTim: getTeamLetter(currentActiveTeam)
   });
 
   timerInterval = setInterval(() => {
@@ -641,17 +1036,13 @@ function startTimer(activeTeam = null) {
     
     io.emit("timerUpdate", { 
       timeRemaining,
-      lockId: lockState.lockId
+      lockId: lockState.lockId,
+      lockSequence: lockState.lockSequence
     });
     lastTimerEvent = 'timerUpdate';
 
     if ([30, 20, 10, 5, 4, 3, 2, 1, 0].includes(timeRemaining)) {
-      // PERBAIKAN: Tambah callback untuk acknowledgment
-      timerAudio.playCountdownAudio(timeRemaining, () => {
-        if (timeRemaining === 0) {
-          logger.audio(`Audio countdown 0 selesai, lanjut penalti otomatis`);
-        }
-      });
+      timerAudio.playCountdownAudio(timeRemaining);
     }
 
     if (timeRemaining <= 0) {
@@ -661,8 +1052,7 @@ function startTimer(activeTeam = null) {
       
       logger.performance('Timer mencapai 0', {
         lockState: lockState,
-        autoPenaltyEnabled: isAutoPenaltyEnabled,
-        lockId: lockState.lockId
+        autoPenaltyEnabled: isAutoPenaltyEnabled
       });
       
       setTimeout(() => {
@@ -693,8 +1083,15 @@ function stopTimer(activeTeam = null) {
     releaseAtomicLock();
   }
   
-  io.emit("timerReset", { lockId: lockState.lockId || 'none' });
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
+  });
   io.emit("lockstate", lockState);
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
+  
   lastTimerEvent = 'timerReset';
 
   logger.performance("Timer dihentikan", { 
@@ -722,8 +1119,15 @@ function resetTimer() {
     releaseAtomicLock();
   }
   
-  io.emit("timerReset", { lockId: lockState.lockId || 'none' });
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
+  });
   io.emit("lockstate", lockState);
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
+  
   lastTimerEvent = 'timerReset';
   
   lockState.lockTime = null;
@@ -745,38 +1149,30 @@ function forceUnlockSystem() {
   isTimerRunning = false;
   timeRemaining = 0;
   
-  const previousLockId = lockState.lockId;
   releaseAtomicLock();
+  
+  // Kirim ke ESP32 via WebSocket
+  sendForceUnlockToESP32();
   
   setImmediate(() => {
     io.emit("lockstate", lockState);
-    io.emit("timerReset", { lockId: previousLockId || 'none' });
-    io.emit("systemUnlocked", { 
-      reason: "buka_kunci_manual",
-      previousLockId: previousLockId
+    io.emit("timerReset", {
+      lockId: lockState.lockId,
+      lockSequence: lockState.lockSequence
     });
+    io.emit("systemUnlocked", { reason: "buka_kunci_manual" });
   });
   
-  logger.performance("Sistem dibuka paksa", { previousLockId });
+  logger.performance("Sistem dibuka paksa");
 }
 
-// ===== MEMUTAR AUDIO BUZZER DAN TIM DENGAN ACKNOWLEDGMENT =====
+// ===== MEMUTAR AUDIO BUZZER DAN TIM =====
 function playBuzzerThenTeamAudio(team) {
   logger.audio(`Memulai urutan audio buzzer untuk Tim ${getTeamLetter(team)}`);
   
-  // PERBAIKAN: Gunakan callback untuk sequence yang tepat
-  timerAudio.playPreTeamAudio(team, () => {
-    // Setelah buzzer selesai, mulai audio tim
-    logger.audio(`Buzzer selesai, mulai audio tim ${getTeamLetter(team)}`);
-    
-    const teamAudioFile = getTeamAudioFile(team);
-    io.emit("playTeamAudio", {
-      team: team,
-      audioFile: teamAudioFile,
-      timerDuration: config.timerDuration,
-      audioId: `team_${Date.now()}_${team}`
-    });
-  });
+  const buzzerPlayed = timerAudio.playPreTeamAudio(team);
+  
+  // Timer tidak dimulai di sini, akan dimulai setelah buzzer selesai (di preTeamAudioFinished)
 }
 
 // ===== FUNGSI RESET TIMER TANPA LOCK =====
@@ -797,7 +1193,10 @@ function resetTimerOnly() {
   // PERBAIKAN: Jangan kirim timerReset jika sistem masih terkunci
   // Hanya kirim event timerReset jika tidak ada kunci
   if (!lockState.locked) {
-    io.emit("timerReset", { lockId: 'timer_only_reset' });
+    io.emit("timerReset", {
+      lockId: lockState.lockId,
+      lockSequence: lockState.lockSequence
+    });
   }
   
   lastTimerEvent = 'timerReset';
@@ -806,58 +1205,6 @@ function resetTimerOnly() {
     lockState: lockState
   });
 }
-
-// ===== ENDPOINT BARU: FULL STATE RECOVERY =====
-app.get("/fullstate", (req, res) => {
-  const clientIP = req.ip || req.connection.remoteAddress;
-  
-  // Update ESP32 activity jika dari ESP32
-  if (clientIP.includes('192.168.1.') || clientIP.includes('172.') || clientIP.includes('10.')) {
-    updateESP32FromHTTP(clientIP, "full_state_request");
-  }
-  
-  const response = {
-    success: true,
-    timestamp: Date.now(),
-    serverTime: new Date().toLocaleTimeString('id-ID'),
-    
-    // State lengkap untuk recovery
-    scores: scores,
-    lockState: lockState,
-    timer: {
-      isRunning: isTimerRunning,
-      remaining: timeRemaining,
-      duration: config.timerDuration
-    },
-    config: config,
-    teamToggleState: teamToggleState,
-    autoPenalty: {
-      enabled: isAutoPenaltyEnabled,
-      points: config.minus
-    },
-    esp32Status: {
-      connected: esp32Status.connected,
-      lastActivity: esp32Status.lastActivity,
-      modulesDetected: esp32Status.modulesDetected,
-      activeTeams: esp32Status.activeTeams,
-      wifiRSSI: esp32Status.wifiRSSI,
-      lastRSSIUpdate: esp32Status.lastRSSIUpdate
-    },
-    
-    // Metadata
-    version: "2.1.0",
-    recoverySupported: true,
-    checksum: `state_${Date.now()}_${lockState.lockSequence}`
-  };
-  
-  logger.info("Full state recovery requested", {
-    clientIP: clientIP,
-    lockId: lockState.lockId,
-    timerRunning: isTimerRunning
-  });
-  
-  res.json(response);
-});
 
 // ===== ENDPOINT PING =====
 app.get("/ping", (req, res) => {
@@ -881,9 +1228,7 @@ app.get("/ping", (req, res) => {
     status: "OK", 
     timestamp: new Date().toISOString(),
     message: "Ping received",
-    serverTime: new Date().toLocaleTimeString('id-ID'),
-    lockState: lockState,
-    timerRunning: isTimerRunning
+    serverTime: new Date().toLocaleTimeString('id-ID')
   });
 });
 
@@ -903,22 +1248,9 @@ app.get("/checktimer", (req, res) => {
     lockActive: lockState.locked,
     timeRemaining: timeRemaining,
     lockedByTeam: lockState.activeTeam,
-    lockId: lockState.lockId,
-    lockSequence: lockState.lockSequence,
     timestamp: Date.now(),
-    serverTime: new Date().toLocaleTimeString('id-ID'),
-    
-    // PERBAIKAN: Tambah informasi untuk recovery
-    shouldUnlock: (!isTimerRunning && !lockState.locked) || 
-                  (isTimerRunning && timeRemaining <= 0),
-    checksum: `timer_${Date.now()}_${lockState.lockSequence}`
+    serverTime: new Date().toLocaleTimeString('id-ID')
   };
-  
-  logger.performance("Check timer request", {
-    team: team,
-    clientIP: clientIP,
-    response: response
-  });
   
   res.setHeader('Content-Type', 'application/json');
   res.json(response);
@@ -930,8 +1262,7 @@ app.get("/timerstatus", (req, res) => {
     timerRunning: isTimerRunning,
     timeRemaining: timeRemaining,
     lockState: lockState,
-    config: config,
-    timestamp: Date.now()
+    config: config
   };
   
   res.json(response);
@@ -944,11 +1275,9 @@ app.get("/synctimer", (req, res) => {
   let response = {
     success: true,
     message: "Timer status",
-    timestamp: Date.now(),
     timer: {
       isRunning: isTimerRunning,
-      remaining: timeRemaining,
-      lockId: lockState.lockId
+      remaining: timeRemaining
     },
     lock: lockState
   };
@@ -959,20 +1288,13 @@ app.get("/synctimer", (req, res) => {
   } else if (action === 'reset') {
     resetTimer();
     response.message = "Timer reset manually";
-  } else if (action === 'recover') {
-    // Recovery mode: force unlock jika timer habis tapi masih locked
-    if (!isTimerRunning && timeRemaining <= 0 && lockState.locked) {
-      forceUnlockSystem();
-      response.message = "Timer recovery applied - force unlocked";
-      response.recoveryApplied = true;
-    }
   }
   
   console.log(`[SYNCTIMER] ${action} request:`, response);
   res.json(response);
 });
 
-// ===== ENDPOINT UPDATE DIPERBAIKI =====
+// ===== ENDPOINT UPDATE =====
 app.get("/update", (req, res) => {
   const startTime = Date.now();
   const requestTime = Date.now();
@@ -1010,62 +1332,47 @@ app.get("/update", (req, res) => {
   }
 
   if (isFirst) {
-    const lockResult = acquireAtomicLock(team);
-    
-    if (!lockResult.success) {
+    if (!acquireAtomicLock(team)) {
       const lockAge = Date.now() - (lockState.lockTime || Date.now());
       const currentTeam = lockState.activeTeam;
       
-      logger.lock(`Request DITOLAK: Tim ${getTeamLetter(team)} - ${lockResult.reason}`, {
-        lockedBy: currentTeam,
-        lockAge: `${lockAge}ms`,
-        lockId: lockState.lockId
-      });
+      logger.lock(`Request DITOLAK: Tim ${getTeamLetter(team)} - sistem sudah terkunci oleh Tim ${getTeamLetter(currentTeam)} (${lockAge}ms yang lalu)`);
       
       return res.status(403).json({ 
         error: "Tombol terkunci",
-        reason: lockResult.reason,
         lockedBy: currentTeam,
-        lockId: lockState.lockId,
         lockAge: `${lockAge}ms`,
         message: `Tim ${getTeamLetter(currentTeam)} lebih cepat ${lockAge}ms`,
         responseTime: `${Date.now() - startTime}ms`
       });
     }
     
-    logger.lock(`Request DITERIMA: Tim ${getTeamLetter(team)} berhasil terkunci`, {
-      lockId: lockResult.lockId,
-      sequence: lockResult.sequence
-    });
+    logger.lock(`Request DITERIMA: Tim ${getTeamLetter(team)} berhasil terkunci`);
     
     setImmediate(() => {
       io.emit("lockstate", lockState);
       io.emit("buzz", { 
         team,
-        lockId: lockResult.lockId,
-        timestamp: Date.now()
+        lockId: lockState.lockId,
+        lockSequence: lockState.lockSequence
       });
+      
+      // Kirim ke ESP32
+      sendLockStateToESP32();
       
       playBuzzerThenTeamAudio(team);
     });
   }
 
   if (add !== 0) {
-    logger.info(`Scoring: Team ${team} add ${add} points`, {
-      lockId: lockState.lockId,
-      sequence: lockState.lockSequence
-    });
-    
+    logger.info(`Scoring: Team ${team} add ${add} points`);
     scores[team - 1] += add;
     
     setImmediate(() => {
       io.emit("update", { team, score: scores[team - 1] });
       io.emit("scoring", { team, isCorrect: add > 0 });
       
-      // PERBAIKAN: Tambah callback untuk acknowledgment audio juri
-      timerAudio.playJuryAudio(add > 0, () => {
-        logger.audio(`Audio juri selesai untuk Tim ${getTeamLetter(team)}`);
-      });
+      timerAudio.playJuryAudio(add > 0);
       
       const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
       io.emit("aiMessage", {
@@ -1077,6 +1384,10 @@ app.get("/update", (req, res) => {
       releaseAtomicLock();
       resetTimer();
       
+      // Kirim ke ESP32
+      sendLockStateToESP32();
+      sendScoreUpdateToESP32(team, scores[team - 1]);
+      
       io.emit("lockstate", lockState);
     });
   }
@@ -1087,9 +1398,7 @@ app.get("/update", (req, res) => {
     tim: team, 
     pertama: isFirst,
     add: add,
-    locked: isFirst ? true : lockState.locked,
-    lockId: lockState.lockId,
-    responseTime: responseTime
+    locked: isFirst ? true : lockState.locked
   });
   
   res.json({ 
@@ -1102,8 +1411,7 @@ app.get("/update", (req, res) => {
     locked: lockState.locked,
     lockedBy: lockState.activeTeam,
     lockId: lockState.lockId,
-    lockSequence: lockState.lockSequence,
-    timestamp: Date.now()
+    lockSequence: lockState.lockSequence
   });
 });
 
@@ -1140,9 +1448,15 @@ app.get("/debug/timer/fix", (req, res) => {
   timeRemaining = 0;
   releaseAtomicLock();
   
-  io.emit("timerReset", { lockId: 'debug_fix' });
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
+  });
   io.emit("lockstate", lockState);
   io.emit("systemUnlocked", { reason: "debug_perbaikan" });
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
   
   res.json({
     sukses: true,
@@ -1168,7 +1482,6 @@ app.get("/forceUnlockAll", (req, res) => {
   isTimerRunning = false;
   timeRemaining = 0;
   
-  const previousLockId = lockState.lockId;
   releaseAtomicLock();
   
   lockState = { 
@@ -1179,25 +1492,21 @@ app.get("/forceUnlockAll", (req, res) => {
     lockSequence: lockState.lockSequence
   };
   
-  io.emit("lockstate", lockState);
-  io.emit("timerReset", { lockId: previousLockId || 'force_unlock' });
-  io.emit("systemUnlocked", { 
-    reason: "force_unlock_all",
-    previousLockId: previousLockId
-  });
+  // Kirim ke ESP32
+  sendForceUnlockToESP32();
   
-  // Kirim notifikasi ke semua ESP32 yang terhubung via WebSocket
-  io.to('esp32').emit('forceUnlockNotification', {
-    timestamp: Date.now(),
-    reason: 'admin_forced'
+  io.emit("lockstate", lockState);
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
   });
+  io.emit("systemUnlocked", { reason: "force_unlock_all" });
   
   res.json({
     sukses: true,
     pesan: "Semua kunci dibuka paksa",
     lockState: lockState,
-    timerRunning: isTimerRunning,
-    previousLockId: previousLockId
+    timerRunning: isTimerRunning
   });
 });
 
@@ -1233,11 +1542,7 @@ app.get("/esp32status", (req, res) => {
       rssi: rssi
     },
     message: "Data monitoring diterima",
-    serverTime: new Date().toLocaleTimeString('id-ID'),
-    esp32Status: {
-      connected: esp32Status.connected,
-      lastActivity: esp32Status.lastActivity
-    }
+    serverTime: new Date().toLocaleTimeString('id-ID')
   });
 });
 
@@ -1245,13 +1550,11 @@ app.get("/esp32status", (req, res) => {
 app.get("/debug/monitoring", (req, res) => {
   res.json({
     esp32Status: esp32Status,
-    rssiHistory: esp32Status.rssiHistory,
     lastUpdate: new Date().toLocaleTimeString('id-ID'),
     fields: {
       modulesDetected: esp32Status.modulesDetected,
       activeTeams: esp32Status.activeTeams,
-      wifiRSSI: esp32Status.wifiRSSI,
-      lastRSSIUpdate: esp32Status.lastRSSIUpdate
+      wifiRSSI: esp32Status.wifiRSSI
     }
   });
 });
@@ -1293,15 +1596,10 @@ if (fs.existsSync(audioDir)) {
 app.get("/", (req, res) => {
   res.json({ 
     status: "Sistem Scoring Kuis", 
-    versi: "2.1.0",  // Updated version
+    versi: "2.0.0",
     lingkungan: isProduction ? "produksi" : "pengembangan",
     siap: true,
-    features: {
-      atomicLock: true,
-      stateRecovery: true,
-      audioAcknowledgment: true,
-      esp32WebSocket: true
-    }
+    websocket_port: WS_PORT
   });
 });
 
@@ -1320,70 +1618,52 @@ app.get("/toggleTeam", (req, res) => {
   logger.info(`Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`, {
     team: team,
     enabled: enabled,
-    currentState: teamToggleState,
-    lockState: lockState
+    currentState: teamToggleState
   });
   
   io.emit("teamToggleUpdate", {
     team: team,
-    enabled: enabled,
-    timestamp: Date.now()
-  });
-  
-  // Kirim notifikasi ke ESP32 jika terkoneksi via WebSocket
-  io.to('esp32').emit('teamToggleNotification', {
-    team: team,
-    enabled: enabled,
-    timestamp: Date.now()
+    enabled: enabled
   });
   
   res.json({ 
     sukses: true, 
     tim: team, 
     diaktifkan: enabled,
-    pesan: `Tim ${getTeamLetter(team)} ${enabled ? 'diaktifkan' : 'dinonaktifkan'}`,
-    timestamp: Date.now()
+    pesan: `Tim ${getTeamLetter(team)} ${enabled ? 'diaktifkan' : 'dinonaktifkan'}` 
   });
 });
 
 app.get("/enableAllTeams", (req, res) => {
   teamToggleState = Array(TEAM_COUNT).fill(true);
   
-  logger.info("All teams enabled", { lockState: lockState });
+  logger.info("All teams enabled");
   
   io.emit("allTeamsEnabled");
-  io.to('esp32').emit('allTeamsEnabledNotification', { timestamp: Date.now() });
   
   res.json({ 
     sukses: true, 
     pesan: "Semua tim diaktifkan",
-    statusToggleTim: teamToggleState,
-    timestamp: Date.now()
+    statusToggleTim: teamToggleState
   });
 });
 
 app.get("/disableAllTeams", (req, res) => {
   teamToggleState = Array(TEAM_COUNT).fill(false);
   
-  logger.info("All teams disabled", { lockState: lockState });
+  logger.info("All teams disabled");
   
   io.emit("allTeamsDisabled");
-  io.to('esp32').emit('allTeamsDisabledNotification', { timestamp: Date.now() });
   
   res.json({ 
     sukses: true, 
     pesan: "Semua tim dinonaktifkan",
-    statusToggleTim: teamToggleState,
-    timestamp: Date.now()
+    statusToggleTim: teamToggleState
   });
 });
 
 app.get("/teamToggleState", (req, res) => {
-  res.json({
-    toggleState: teamToggleState,
-    timestamp: Date.now(),
-    checksum: `toggle_${Date.now()}_${teamToggleState.filter(t => t).length}`
-  });
+  res.json(teamToggleState);
 });
 
 // ===== ROUTE UNTUK ESP32 =====
@@ -1444,9 +1724,7 @@ app.get("/esp32checkin", (req, res) => {
     status: esp32Status.connected ? "CONTROLLER ONLINE" : "CONTROLLER OFFLINE",
     waktu: new Date().toLocaleTimeString('id-ID'),
     ipAnda: realIP,
-    heartbeatCount: esp32Status.heartbeatCount,
-    lockState: lockState,
-    timerRunning: isTimerRunning
+    heartbeatCount: esp32Status.heartbeatCount
   });
 });
 
@@ -1491,8 +1769,7 @@ app.get("/debug/esp32", (req, res) => {
       `${Math.floor((now - esp32Status.lastActivity) / 1000)} detik` : "N/A",
     modulTerdeteksi: esp32Status.modulesDetected || 0,
     timAktif: esp32Status.activeTeams || 0,
-    sinyalWiFi: esp32Status.wifiRSSI || 0,
-    rssiHistory: esp32Status.rssiHistory
+    sinyalWiFi: esp32Status.wifiRSSI || 0
   });
 });
 
@@ -1501,17 +1778,15 @@ app.get("/toggleAutoPenalty", (req, res) => {
   const enabled = req.query.enabled === 'true';
   isAutoPenaltyEnabled = enabled;
   
+  // Kirim konfigurasi ke ESP32
+  sendConfigToESP32();
+  
   io.emit("autoPenaltyToggle", { enabled: isAutoPenaltyEnabled });
-  io.to('esp32').emit('autoPenaltyNotification', { 
-    enabled: isAutoPenaltyEnabled,
-    timestamp: Date.now()
-  });
   
   res.json({ 
     sukses: true, 
     diaktifkan: isAutoPenaltyEnabled,
-    pesan: `Penalti otomatis ${enabled ? 'diaktifkan' : 'dinonaktifkan'}`,
-    timestamp: Date.now()
+    pesan: `Penalti otomatis ${enabled ? 'diaktifkan' : 'dinonaktifkan'}` 
   });
 });
 
@@ -1519,8 +1794,7 @@ app.get("/autoPenaltyStatus", (req, res) => {
   res.json({ 
     diaktifkan: isAutoPenaltyEnabled,
     poinPenalti: config.minus,
-    deskripsi: "Penalti otomatis diterapkan saat timer habis tanpa respon juri",
-    timestamp: Date.now()
+    deskripsi: "Penalti otomatis diterapkan saat timer habis tanpa respon juri"
   });
 });
 
@@ -1537,8 +1811,7 @@ app.get("/audioFinished", (req, res) => {
   res.json({ 
     sukses: true, 
     pesan: "Audio selesai diproses",
-    timerDimulai: isTimerRunning,
-    timestamp: Date.now()
+    timerDimulai: isTimerRunning
   });
 });
 
@@ -1558,16 +1831,14 @@ app.get("/preTeamAudioFinished", (req, res) => {
     io.emit("playTeamAudio", {
       team: team,
       audioFile: teamAudioFile,
-      timerDuration: config.timerDuration,
-      audioId: `team_${Date.now()}_${team}`
+      timerDuration: config.timerDuration
     });
   }
   
   res.json({ 
     sukses: true, 
     pesan: "Audio buzzer selesai, audio tim dan timer dimulai",
-    tim: team,
-    timestamp: Date.now()
+    tim: team
   });
 });
 
@@ -1580,32 +1851,19 @@ app.get("/triggerAudio", (req, res) => {
   
   playBuzzerThenTeamAudio(team);
   
-  res.json({ 
-    sukses: true, 
-    tim: team, 
-    aksi: "urutan_buzzer_dipicu",
-    timestamp: Date.now()
-  });
+  res.json({ sukses: true, tim: team, aksi: "urutan_buzzer_dipicu" });
 });
 
 app.get("/unlock", (req, res) => {
-  const previousLockId = lockState.lockId;
   resetTimer();
   releaseAtomicLock();
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
+  
   io.emit("lockstate", lockState);
   
-  // Kirim notifikasi unlock ke ESP32
-  io.to('esp32').emit('manualUnlockNotification', {
-    previousLockId: previousLockId,
-    timestamp: Date.now()
-  });
-  
-  res.json({ 
-    sukses: true, 
-    pesan: "Sistem dibuka dan timer direset", 
-    statusKunci: lockState,
-    previousLockId: previousLockId
-  });
+  res.json({ sukses: true, pesan: "Sistem dibuka dan timer direset", statusKunci: lockState });
 });
 
 app.get("/setconfig", (req, res) => {
@@ -1619,6 +1877,9 @@ app.get("/setconfig", (req, res) => {
     config.timerDuration = timerDuration;
   }
   
+  // Kirim ke ESP32 via WebSocket
+  sendConfigToESP32();
+  
   io.emit("config", config);
   
   io.emit("autoPenaltyConfig", { 
@@ -1626,61 +1887,36 @@ app.get("/setconfig", (req, res) => {
     poinPenalti: config.minus 
   });
   
-  // Kirim notifikasi konfigurasi ke ESP32
-  io.to('esp32').emit('configUpdate', {
-    config: config,
-    timestamp: Date.now()
-  });
-  
-  res.json({ 
-    sukses: true, 
-    konfigurasi: config,
-    timestamp: Date.now()
-  });
+  res.json({ sukses: true, konfigurasi: config });
 });
 
 app.get("/reset", (req, res) => {
   scores = Array(TEAM_COUNT).fill(0);
   resetTimer();
   releaseAtomicLock();
+  
+  // Kirim semua scores ke ESP32
+  if (esp32WebSocket) {
+    for (let i = 1; i <= TEAM_COUNT; i++) {
+      sendScoreUpdateToESP32(i, 0);
+    }
+  }
+  
   io.emit("reset", scores);
   io.emit("lockstate", lockState);
-  
-  // Kirim notifikasi reset ke ESP32
-  io.to('esp32').emit('scoreResetNotification', {
-    timestamp: Date.now()
-  });
-  
-  res.json({ 
-    sukses: true, 
-    pesan: "Skor direset dan timer direset", 
-    skor: scores,
-    timestamp: Date.now()
-  });
+  res.json({ sukses: true, pesan: "Skor direset dan timer direset", skor: scores });
 });
 
 app.get("/scores", (req, res) => {
-  res.json({
-    scores: scores,
-    timestamp: Date.now(),
-    checksum: `scores_${Date.now()}_${scores.reduce((a, b) => a + b, 0)}`
-  });
+  res.json(scores);
 });
 
 app.get("/lockstate", (req, res) => {
-  res.json({
-    ...lockState,
-    timestamp: Date.now(),
-    checksum: `lock_${Date.now()}_${lockState.lockSequence}`
-  });
+  res.json(lockState);
 });
 
 app.get("/config", (req, res) => {
-  res.json({
-    ...config,
-    timestamp: Date.now(),
-    autoPenaltyEnabled: isAutoPenaltyEnabled
-  });
+  res.json(config);
 });
 
 // ===== ENDPOINT: TEST KONEKSI ESP32 =====
@@ -1705,30 +1941,17 @@ app.get("/testESP32Connection", (req, res) => {
       sejakAktivitasTerakhir: `${timeSinceLastActivity} detik`,
       modulTerdeteksi: esp32Status.modulesDetected,
       timAktif: esp32Status.activeTeams,
-      sinyalWiFi: esp32Status.wifiRSSI,
-      rssiStability: esp32Status.rssiHistory.length > 0 ? 
-        `Rata-rata: ${Math.round(esp32Status.rssiHistory.reduce((a, b) => a + b.rssi, 0) / esp32Status.rssiHistory.length)} dBm` : "Tidak ada data"
+      sinyalWiFi: esp32Status.wifiRSSI
     },
     waktuRespon: new Date().toLocaleTimeString('id-ID'),
-    saran: !isRecentlyActive ? "Cek koneksi WiFi ESP32 atau restart ESP32" : null,
-    lockState: lockState,
-    timerRunning: isTimerRunning
+    saran: !isRecentlyActive ? "Cek koneksi WiFi ESP32 atau restart ESP32" : null
   });
 });
 
 // ===== DEBUG ENDPOINT =====
 app.get("/debug/connections", (req, res) => {
-  const sockets = Array.from(io.sockets.sockets.values());
-  
   res.json({
     totalConnections: io.engine.clientsCount,
-    sockets: sockets.map(s => ({
-      id: s.id,
-      clientType: s.handshake.query.clientType || 'unknown',
-      ip: s.handshake.address,
-      rooms: Array.from(s.rooms),
-      connectedAt: s.handshake.time
-    })),
     esp32Status: esp32Status,
     lockState: lockState,
     timerRunning: isTimerRunning,
@@ -1742,17 +1965,22 @@ app.get("/debug/connections", (req, res) => {
 
 app.get("/debug/resetlock", (req, res) => {
   logger.info("[DEBUG] Manual lock reset");
-  const previousLockId = lockState.lockId;
   releaseAtomicLock();
   resetTimer();
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
+  
   io.emit("lockstate", lockState);
-  io.emit("timerReset", { lockId: previousLockId || 'debug_reset' });
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
+  });
   
   res.json({ 
     success: true, 
     message: "Lock manually reset",
-    lockState: lockState,
-    previousLockId: previousLockId
+    lockState: lockState 
   });
 });
 
@@ -1766,8 +1994,7 @@ app.get("/health", (req, res) => {
     timer: {
       berjalan: isTimerRunning,
       tersisa: timeRemaining,
-      lastTimerEvent: lastTimerEvent,
-      lockId: lockState.lockId
+      lastTimerEvent: lastTimerEvent
     },
     esp32: esp32Status,
     penaltiOtomatis: {
@@ -1780,37 +2007,45 @@ app.get("/health", (req, res) => {
       jumlahNonaktif: teamToggleState.filter(state => !state).length
     },
     koneksi: io.engine.clientsCount,
-    lingkungan: isProduction ? "produksi" : "pengembangan",
-    versi: "2.1.0",
-    checksum: `health_${Date.now()}_${lockState.lockSequence}`
+    websocket_connected: !!esp32WebSocket,
+    lingkungan: isProduction ? "produksi" : "pengembangan"
   });
+});
+
+// ===== ENDPOINT: FULL STATE SYNC =====
+app.get("/fullstate", (req, res) => {
+  const fullState = {
+    success: true,
+    scores: scores,
+    lockState: lockState,
+    timer: {
+      isRunning: isTimerRunning,
+      remaining: timeRemaining
+    },
+    config: config,
+    esp32Status: esp32Status,
+    teamToggleState: teamToggleState,
+    autoPenaltyEnabled: isAutoPenaltyEnabled,
+    checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+  };
+  
+  res.json(fullState);
 });
 
 // ===== HANDLER 404 DAN ERROR =====
 app.use((req, res) => {
-  res.status(404).json({ 
-    error: "Route tidak ditemukan",
-    timestamp: Date.now(),
-    availableEndpoints: [
-      "/", "/health", "/fullstate", "/config", "/scores", "/lockstate",
-      "/update", "/checktimer", "/timerstatus", "/synctimer",
-      "/toggleTeam", "/teamToggleState", "/esp32checkin", "/esp32status",
-      "/debug/esp32", "/debug/monitoring", "/debug/connections"
-    ]
-  });
+  res.status(404).json({ error: "Route tidak ditemukan" });
 });
 
 app.use((err, req, res, next) => {
   logger.error('Error server:', err);
   res.status(500).json({ 
     error: "Internal server error",
-    pesan: isProduction ? "Terjadi kesalahan" : err.message,
-    timestamp: Date.now(),
-    requestId: `err_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    pesan: isProduction ? "Terjadi kesalahan" : err.message
   });
 });
 
-// ===== SOCKET.IO HANDLERS DIPERBAIKI =====
+// ===== SOCKET.IO HANDLERS =====
 io.on("connection", (socket) => {
   const clientType = socket.handshake.query.clientType || 'unknown';
   const clientIP = socket.handshake.address;
@@ -1822,123 +2057,47 @@ io.on("connection", (socket) => {
                   clientIP.includes('10.') ||
                   userAgent.toLowerCase().includes('esp32') ||
                   userAgent.toLowerCase().includes('arduino');
-  
-  const isAdmin = clientType === 'admin' || 
-                  userAgent.toLowerCase().includes('mozilla') ||
-                  userAgent.toLowerCase().includes('chrome');
 
-  logger.info(`New connection: ${socket.id}`, {
+  logger.info(`New Socket.IO connection: ${socket.id}`, {
     ip: clientIP,
     userAgent: userAgent,
-    clientType: clientType,
-    isESP32: isESP32,
-    isAdmin: isAdmin
+    isESP32: isESP32
   });
 
-  // Join room berdasarkan tipe client
   if (isESP32) {
-    socket.join('esp32');
-    logger.esp32(`ESP32 joined room: ${socket.id}`);
-    
-    // PERBAIKAN: Update ESP32 status untuk WebSocket connection
     esp32Status.connected = true;
     esp32Status.lastActivity = new Date();
     esp32Status.socketId = socket.id;
     esp32Status.ip = clientIP;
-    esp32Status.connectionType = "websocket_connection";
+    esp32Status.connectionType = "koneksi_socket";
     
     io.emit("esp32Status", esp32Status);
     
-    // Kirim state lengkap ke ESP32 untuk recovery
-    socket.emit("fullStateSync", {
-      scores: scores,
-      lockState: lockState,
-      timer: {
-        isRunning: isTimerRunning,
-        remaining: timeRemaining
-      },
-      config: config,
-      teamToggleState: teamToggleState,
-      autoPenalty: isAutoPenaltyEnabled,
-      timestamp: Date.now(),
-      checksum: `sync_${Date.now()}_${lockState.lockSequence}`
-    });
-    
-    // Handler untuk ping dari ESP32 via WebSocket
-    socket.on("pingFromESP32", (data, callback) => {
-      esp32Status.lastActivity = new Date();
-      
-      if (data && data.rssi) {
-        esp32Status.wifiRSSI = data.rssi;
-        esp32Status.lastRSSIUpdate = new Date();
-      }
-      
-      io.emit("esp32Status", esp32Status);
-      
+    socket.on("pingFromAdmin", (data, callback) => {
       if (callback) {
         callback({
           sukses: true,
-          pesan: "PONG",
+          pesan: "ESP32 ONLINE DAN MERESPON",
           timestamp: Date.now(),
-          lockState: lockState,
-          timerRunning: isTimerRunning,
-          timeRemaining: timeRemaining
+          dataDiterima: data,
+          idESP32: "MASTER_CONTROLLER",
+          firmware: "ESP32_QUIZ_BUZZER_V2"
         });
       }
-    });
-    
-    // Handler untuk audio acknowledgment dari ESP32
-    socket.on("audioAcknowledgment", (data) => {
-      logger.audio(`Audio acknowledgment from ESP32: ${data.audioId} - ${data.success ? 'success' : 'failed'}`);
       
-      if (!data.success) {
-        logger.error(`Audio failed on ESP32: ${data.audioId}`, data);
-        
-        // Jika audio team gagal, fallback ke server timer start
-        if (data.audioType === 'team' && data.team) {
-          logger.audio(`Fallback: Starting timer for team ${data.team} due to audio failure`);
-          startTimer(data.team);
-        }
-      }
+      esp32Status.lastActivity = new Date();
+      io.emit("esp32Status", esp32Status);
     });
     
-    // Handler untuk state recovery request dari ESP32
-    socket.on("requestStateRecovery", (data, callback) => {
-      logger.esp32(`State recovery requested by ESP32`, data);
-      
-      if (callback) {
-        callback({
-          success: true,
-          state: {
-            scores: scores,
-            lockState: lockState,
-            timer: {
-              isRunning: isTimerRunning,
-              remaining: timeRemaining
-            },
-            config: config,
-            teamToggleState: teamToggleState,
-            checksum: `recovery_${Date.now()}_${lockState.lockSequence}`
-          }
-        });
-      }
+    socket.on("esp32Heartbeat", (data) => {
+      esp32Status.lastActivity = new Date();
+      io.emit("esp32Status", esp32Status);
     });
     
-    // Handler untuk force unlock acknowledgment dari ESP32
-    socket.on("forceUnlockAcknowledgment", (data) => {
-      logger.esp32(`ESP32 acknowledged force unlock`, data);
-      
-      // Reset state lokal jika perlu
-      if (data.success && lockState.locked) {
-        logger.esp32(`Resetting local lock state after ESP32 acknowledgment`);
-        releaseAtomicLock();
-        io.emit("lockstate", lockState);
-      }
+    socket.on("esp32Activity", (data) => {
+      esp32Status.lastActivity = new Date();
+      io.emit("esp32Status", esp32Status);
     });
-    
-  } else if (isAdmin) {
-    socket.join('admin');
-    logger.info(`Admin joined room: ${socket.id}`);
   }
 
   // Kirim data awal ke client
@@ -1955,25 +2114,10 @@ io.on("connection", (socket) => {
   if (isTimerRunning) {
     socket.emit("timerStart", { 
       duration: timeRemaining,
-      lockId: lockState.lockId 
+      lockId: lockState.lockId,
+      lockSequence: lockState.lockSequence
     });
   }
-
-  // Handler untuk audio acknowledgment dari display
-  socket.on("audioAck", (data) => {
-    logger.audio(`Audio acknowledgment from display`, {
-      audioId: data.audioId,
-      success: data.success,
-      team: data.team,
-      audioType: data.audioType
-    });
-    
-    // Jika audio tim berhasil diputar, pastikan timer sudah mulai
-    if (data.audioType === 'team' && data.success && data.team && !isTimerRunning) {
-      logger.audio(`Starting timer for team ${data.team} after audio acknowledgment`);
-      startTimer(data.team);
-    }
-  });
 
   socket.on("getESP32Status", () => {
     socket.emit("esp32Status", esp32Status);
@@ -1981,12 +2125,8 @@ io.on("connection", (socket) => {
 
   // Event untuk kontrol timer
   socket.on("requestTimerReset", () => {
-    const previousLockId = lockState.lockId;
     resetTimer();
-    socket.emit("timerResetConfirm", { 
-      sukses: true,
-      previousLockId: previousLockId
-    });
+    socket.emit("timerResetConfirm", { sukses: true });
   });
   
   socket.on("getTimerStatus", () => {
@@ -1994,8 +2134,7 @@ io.on("connection", (socket) => {
       berjalan: isTimerRunning,
       waktuTersisa: timeRemaining,
       statusKunci: lockState,
-      lastTimerEvent: lastTimerEvent,
-      checksum: `timerstatus_${Date.now()}_${lockState.lockSequence}`
+      lastTimerEvent: lastTimerEvent
     });
   });
 
@@ -2015,26 +2154,52 @@ io.on("connection", (socket) => {
       io.emit("playTeamAudio", {
         team: team,
         audioFile: teamAudioFile,
-        timerDuration: config.timerDuration,
-        audioId: `team_${Date.now()}_${team}`
+        timerDuration: config.timerDuration
       });
     }
   });
 
-  // Handler untuk force unlock dari admin via WebSocket
+  // Event untuk force unlock via WebSocket
   socket.on("forceUnlockRequest", (data, callback) => {
-    logger.info(`Force unlock requested via WebSocket from ${socket.id}`);
-    
     forceUnlockSystem();
     
     if (callback) {
-      callback({
-        success: true,
-        message: "System force unlocked",
-        timestamp: Date.now(),
-        previousLockId: lockState.lockId
-      });
+      callback({ success: true, message: "Force unlock executed" });
     }
+  });
+  
+  socket.on("requestStateRecovery", (data, callback) => {
+    // Kirim semua state ke ESP32
+    sendConfigToESP32();
+    sendLockStateToESP32();
+    
+    // Kirim semua scores
+    for (let i = 1; i <= TEAM_COUNT; i++) {
+      sendScoreUpdateToESP32(i, scores[i-1]);
+    }
+    
+    if (callback) {
+      callback({ success: true, message: "State recovery sent to ESP32" });
+    }
+  });
+  
+  socket.on("fullStateSync", () => {
+    const fullState = {
+      success: true,
+      scores: scores,
+      lockState: lockState,
+      timer: {
+        isRunning: isTimerRunning,
+        remaining: timeRemaining
+      },
+      config: config,
+      esp32Status: esp32Status,
+      teamToggleState: teamToggleState,
+      autoPenaltyEnabled: isAutoPenaltyEnabled,
+      checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+    };
+    
+    socket.emit("fullStateSync", fullState);
   });
 
   socket.on("disconnect", (reason) => {
@@ -2044,40 +2209,18 @@ io.on("connection", (socket) => {
                      clientIP.includes('10.');
                      
     if (wasESP32) {
-      // Jangan langsung mark as disconnected, tunggu timeout
-      logger.esp32(`ESP32 WebSocket disconnected: ${socket.id}`, { reason: reason });
-      
-      // Hanya update connection type, biarkan checkESP32Status handle timeout
-      esp32Status.connectionType = "websocket_disconnected";
-      
-      // Kirim notifikasi ke admin
-      io.to('admin').emit('esp32Warning', {
-        type: 'websocket_disconnected',
-        message: `ESP32 WebSocket terputus: ${reason}`,
-        socketId: socket.id,
-        timestamp: new Date()
-      });
+      esp32Status.connected = false;
+      esp32Status.connectionType = "socket_terputus";
+      io.emit("esp32Status", esp32Status);
     }
     
-    logger.info(`Disconnect: ${socket.id}`, { 
-      reason: reason, 
-      wasESP32: wasESP32,
-      clientType: clientType 
-    });
+    logger.info(`Socket.IO disconnect: ${socket.id}`, { reason: reason, wasESP32: wasESP32 });
   });
 });
 
-// ===== MONITORING ESP32 DIPERBAIKI =====
-setInterval(checkESP32Status, 30000); // Setiap 30 detik
-
-// ===== STATE RECOVERY CLEANUP =====
-setInterval(() => {
-  // Bersihkan rssiHistory yang terlalu lama (lebih dari 1 jam)
-  const oneHourAgo = Date.now() - (60 * 60 * 1000);
-  esp32Status.rssiHistory = esp32Status.rssiHistory.filter(
-    entry => new Date(entry.timestamp).getTime() > oneHourAgo
-  );
-}, 3600000); // Setiap 1 jam
+// ===== MONITORING ESP32 =====
+setInterval(checkESP32Status, 60000);
+setInterval(monitorESP32WebSocket, 10000);
 
 // ===== MEMULAI SERVER =====
 async function startServer() {
@@ -2085,13 +2228,13 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS Ridwan and Team - VERSI 2.1.0');
+    console.log('SISTEM KUIS Ridwan and Team');
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
-    console.log(`Tampilan: http://localhost:${PORT}`);
+    console.log(`Socket.IO Server: http://localhost:${PORT}`);
+    console.log(`WebSocket Server (ESP32): ws://localhost:${WS_PORT}`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log(`Debug Monitoring: http://localhost:${PORT}/debug/monitoring`);
-    console.log(`Full State Recovery: http://localhost:${PORT}/fullstate`);
+    console.log(`Display: http://localhost:${PORT}/display.html`);
     console.log('========================================');
   });
 }
