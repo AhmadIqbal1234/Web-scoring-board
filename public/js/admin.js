@@ -1613,7 +1613,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // PERBAIKAN: Tambah event untuk menampilkan informasi versi
   const versionInfo = document.createElement('div');
   versionInfo.className = 'version-info';
-  versionInfo.textContent = 'v2.1.0 | Enhanced State Recovery';
+  versionInfo.textContent = 'v2.1.0';
   versionInfo.title = 'Sistem dengan atomic lock, state recovery, dan WebSocket integration';
   document.querySelector('.admin-header').appendChild(versionInfo);
 });
