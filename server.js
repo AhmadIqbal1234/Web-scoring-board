@@ -27,7 +27,7 @@ const wss = new WebSocketServer({
   noServer: true  // Tidak membuat server sendiri
 });
 
-// Kemudian di bagian startServer atau di http.on('upgrade'):
+// PERBAIKAN: Setup upgrade handler di awal
 http.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
   
@@ -45,6 +45,7 @@ http.on('upgrade', (request, socket, head) => {
     socket.destroy();
   }
 });
+
 // State untuk koneksi WebSocket ESP32
 let esp32WebSocket = null;
 let esp32WebSocketId = null;
@@ -637,10 +638,20 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   
   const team = buffer[1];
   const isCorrect = buffer[2] === 1;
-  const points = (buffer[3] << 8) | buffer[4];
+  
+  // PERBAIKAN: Baca sebagai signed 16-bit integer untuk nilai minus
+  const rawPoints = (buffer[3] << 8) | buffer[4];
+  // Konversi ke signed 16-bit
+  const points = rawPoints > 32767 ? rawPoints - 65536 : rawPoints;
+  
   const timestamp = (buffer[5] << 24) | (buffer[6] << 16) | (buffer[7] << 8) | buffer[8];
   
-  logger.esp32(`ESP32 jury action: Team ${team}, ${isCorrect ? 'Correct' : 'Wrong'}, ${points} points`);
+  logger.esp32(`ESP32 jury action: Team ${team}, ${isCorrect ? 'Correct' : 'Wrong'}, ${points} points`, {
+    rawBytes: [buffer[3], buffer[4]],
+    rawValue: rawPoints,
+    calculatedPoints: points,
+    bufferLength: buffer.length
+  });
   
   // Update score
   scores[team - 1] += points;
@@ -673,12 +684,25 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
 
 // ===== SEND CONFIG TO ESP32 =====
 function sendConfigToESP32() {
-  if (!esp32WebSocket) return;
+  if (!esp32WebSocket) {
+    logger.websocket("ESP32 WebSocket tidak terhubung, tidak bisa kirim config");
+    return;
+  }
+  
+  // PERBAIKAN: Konversi nilai minus ke byte dengan benar dan tambah logging
+  const minusByte = config.minus < 0 ? (256 + config.minus) : config.minus;
+  
+  // Debug logging
+  logger.websocket(`Sending config to ESP32: plus=${config.plus}, minus=${config.minus} (byte: ${minusByte})`, {
+    minusOriginal: config.minus,
+    minusAsByte: minusByte,
+    minusHex: minusByte.toString(16).toUpperCase()
+  });
   
   const configMsg = Buffer.from([
     0x86, // MSG_CONFIG_UPDATE
     config.plus,
-    config.minus < 0 ? (256 + config.minus) : config.minus, // Convert negative to byte
+    minusByte,
     config.timerDuration,
     isAutoPenaltyEnabled ? 0x01 : 0x00,
     0x00, // Reserved
@@ -695,6 +719,8 @@ function sendLockStateToESP32() {
   
   if (lockState.locked) {
     const lockTimestamp = lockState.lockTime || Date.now();
+    const lockSequence = lockState.lockSequence;
+    
     const lockMsg = Buffer.from([
       0x81, // MSG_LOCK_ACQUIRED
       lockState.activeTeam,
@@ -702,8 +728,8 @@ function sendLockStateToESP32() {
       (lockTimestamp >> 16) & 0xFF,
       (lockTimestamp >> 8) & 0xFF,
       lockTimestamp & 0xFF,
-      (lockState.lockSequence >> 8) & 0xFF,
-      lockState.lockSequence & 0xFF,
+      (lockSequence >> 8) & 0xFF,
+      lockSequence & 0xFF,
       config.timerDuration
     ]);
     
@@ -1562,6 +1588,28 @@ app.get("/debug/monitoring", (req, res) => {
   });
 });
 
+// ===== ENDPOINT BARU: TEST CONFIG DEBUG =====
+app.get("/test/config", (req, res) => {
+  res.json({
+    serverConfig: config,
+    esp32WebSocketConnected: !!esp32WebSocket,
+    lastConfigSent: new Date().toISOString(),
+    testData: {
+      plusAsByte: config.plus,
+      minusAsByte: config.minus < 0 ? (256 + config.minus) : config.minus,
+      minusOriginal: config.minus,
+      minusHex: (config.minus < 0 ? (256 + config.minus) : config.minus).toString(16).toUpperCase(),
+      signedInterpretation: config.minus < 0 ? `Negative: ${config.minus}` : `Positive: ${config.minus}`
+    },
+    currentState: {
+      lockState: lockState,
+      isTimerRunning: isTimerRunning,
+      timeRemaining: timeRemaining,
+      scores: scores
+    }
+  });
+});
+
 // ===== MELAYANI FILE STATIS =====
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
@@ -1602,7 +1650,8 @@ app.get("/", (req, res) => {
     versi: "2.0.0",
     lingkungan: isProduction ? "produksi" : "pengembangan",
     siap: true,
-    websocket_port: WS_PORT
+    websocket_port: WS_PORT,
+    websocket_path: "/esp32ws"
   });
 });
 
@@ -1869,22 +1918,40 @@ app.get("/unlock", (req, res) => {
   res.json({ sukses: true, pesan: "Sistem dibuka dan timer direset", statusKunci: lockState });
 });
 
+// ===== PERBAIKAN ENDPOINT: SETCONFIG DENGAN VALIDASI =====
 app.get("/setconfig", (req, res) => {
-  const plus = parseInt(req.query.plus);
-  const minus = parseInt(req.query.minus);
+  let plus = parseInt(req.query.plus);
+  let minus = parseInt(req.query.minus);
   const timerDuration = parseInt(req.query.timerDuration);
   
-  if (!Number.isNaN(plus)) config.plus = plus;
-  if (!Number.isNaN(minus)) config.minus = minus;
+  // PERBAIKAN: Validasi input dan pastikan minus tetap negatif
+  if (!Number.isNaN(plus) && plus > 0) {
+    config.plus = plus;
+    logger.info(`Config updated: plus points = ${plus}`);
+  }
+  
+  if (!Number.isNaN(minus) && minus < 0) {
+    config.minus = minus;
+    logger.info(`Config updated: minus points = ${minus} (negatif)`);
+  } else if (!Number.isNaN(minus)) {
+    logger.warning(`Invalid minus value: ${minus}. Must be negative. Keeping previous value: ${config.minus}`);
+  }
+  
   if (!Number.isNaN(timerDuration) && timerDuration >= 5 && timerDuration <= 300) {
     config.timerDuration = timerDuration;
+    logger.info(`Config updated: timer duration = ${timerDuration} seconds`);
   }
+  
+  // Debug logging
+  logger.websocket(`Updated config: ${JSON.stringify(config)}`, {
+    rawInput: { plus, minus, timerDuration },
+    finalConfig: config
+  });
   
   // Kirim ke ESP32 via WebSocket
   sendConfigToESP32();
   
   io.emit("config", config);
-  
   io.emit("autoPenaltyConfig", { 
     diaktifkan: isAutoPenaltyEnabled,
     poinPenalti: config.minus 
@@ -2235,7 +2302,7 @@ async function startServer() {
     console.log('========================================');
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Socket.IO Server: http://localhost:${PORT}`);
-    console.log(`WebSocket Server (ESP32): ws://localhost:${WS_PORT}`);
+    console.log(`WebSocket Server (ESP32): ws://localhost:${PORT}/esp32ws`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
     console.log(`Display: http://localhost:${PORT}/display.html`);
     console.log('========================================');
