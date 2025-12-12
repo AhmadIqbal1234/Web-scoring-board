@@ -2304,7 +2304,7 @@ async function startServer() {
     console.log(`Socket.IO Server: http://localhost:${PORT}`);
     console.log(`WebSocket Server (ESP32): ws://localhost:${PORT}/esp32ws`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
-    console.log(`Display: http://localhost:${PORT}/display.html`);
+    console.log(`Display: http://localhost:${PORT}/index.html`);
     console.log('========================================');
   });
 }
