@@ -1,4 +1,3 @@
-
 /*
   ESP32 Quiz Buzzer System - WebSocket Version
   VERSION 4.0 - WebSocket Protocol with Binary Messages
@@ -12,10 +11,10 @@
 #include <ArduinoJson.h>
 #include <WiFiManager.h>
 
-// ========== KONFIGURASI ==========
-const char* DEFAULT_SERVER_WS = "http://web-scoring-board-production.up.railway.app/"; // Ganti dengan IP server Anda
-const int   WS_PORT = 443;
-const char* WS_PATH = "/";
+// ========== KONFIGURASI UNTUK RAILWAY SSL ==========
+const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app"; // Domain tanpa http://
+const int   WS_PORT = 443;                                                     // Port untuk WSS
+const char* WS_PATH = "/";                                                     // Path WebSocket
 const char* WIFI_AP_NAME = "Quiz_Config_WS";
 
 // ========== PIN DEFINITION ==========
@@ -131,10 +130,12 @@ void handleWifiReset();
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
 void sendButtonPressWS(int team);
 void sendHeartbeatWS();
+void sendModuleStatus();
 void handleWebSocketBinary(uint8_t *payload, size_t length);
 void processButtonPress(int team);
 void handleJuryButtons();
 void resetLockState();
+void testWebSocketConnection();
 
 // ========== SETUP ==========
 void setup() {
@@ -143,6 +144,7 @@ void setup() {
   
   Serial.println("\n========================================");
   Serial.println("ESP32 QUIZ BUZZER - WebSocket Version 4.0");
+  Serial.println("Optimized for Railway SSL/HTTPS");
   Serial.println("========================================");
   
   // Initialize pins
@@ -168,19 +170,48 @@ void setup() {
   // Initialize modules
   initializeModules();
   
-  // Setup WebSocket
-  webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+  // Setup WebSocket untuk Railway SSL
+  Serial.println("\n[SETUP] Configuring WebSocket for Railway SSL...");
+  Serial.print("Server: ");
+  Serial.println(DEFAULT_SERVER_WS);
+  Serial.print("Port: ");
+  Serial.println(WS_PORT);
+  Serial.print("Path: ");
+  Serial.println(WS_PATH);
+  
+  // PERBAIKAN: Gunakan beginSSL untuk koneksi WSS (WebSocket Secure)
+  // Jika menggunakan port 443, gunakan beginSSL
+  // Jika menggunakan port 80, gunakan begin
+  if (WS_PORT == 443) {
+    // Untuk Railway dengan SSL
+    webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    Serial.println("[SETUP] Using SSL WebSocket (WSS)");
+  } else {
+    // Untuk koneksi non-SSL
+    webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    Serial.println("[SETUP] Using regular WebSocket (WS)");
+  }
+  
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
   
-  Serial.println("\n[SETUP] System ready!");
+  // PERBAIKAN: Hapus setInsecure() karena tidak didukung
+  // webSocket.setInsecure(); // HAPUS BARIS INI
+  
+  // Enable heartbeat untuk menjaga koneksi
+  webSocket.enableHeartbeat(15000, 3000, 2);
+  
+  Serial.println("\n[SETUP] System ready! Waiting for WebSocket connection...");
   Serial.println("========================================\n");
 }
 
 // ========== WIFI MANAGER ==========
 void setupWiFiManager() {
-  WiFiManagerParameter custom_ws_server("ws_server", "WebSocket Server", DEFAULT_SERVER_WS, 40);
+  WiFiManagerParameter custom_ws_server("ws_server", "WebSocket Server", DEFAULT_SERVER_WS, 100);
   wm.addParameter(&custom_ws_server);
+  
+  // Set timeout lebih lama
+  wm.setConfigPortalTimeout(180);
   
   if (!wm.autoConnect(WIFI_AP_NAME)) {
     Serial.println("Failed to connect, restarting...");
@@ -191,6 +222,10 @@ void setupWiFiManager() {
   Serial.println("WiFi connected!");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+  Serial.print("RSSI: ");
+  Serial.println(WiFi.RSSI());
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
 }
 
 // ========== MODULE FUNCTIONS ==========
@@ -220,6 +255,8 @@ void initializeModules() {
           Serial.printf("  Team %s enabled\n", TEAM_MAPPINGS[t].teamName);
         }
       }
+    } else {
+      Serial.printf("Module 0x%02X NOT detected\n", MODULE_ADDRESSES[i]);
     }
   }
   
@@ -228,7 +265,8 @@ void initializeModules() {
 
 bool checkModule(uint8_t addr) {
   Wire.beginTransmission(addr);
-  return Wire.endTransmission() == 0;
+  byte error = Wire.endTransmission();
+  return error == 0;
 }
 
 bool writePCF(uint8_t addr, uint8_t value) {
@@ -302,16 +340,22 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       
       // Send initial heartbeat
       sendHeartbeatWS();
+      
+      // Send module status
+      sendModuleStatus();
+      
+      Serial.println("[WS] Connection established successfully!");
       break;
       
     case WStype_DISCONNECTED:
-      Serial.println("[WS] Disconnected!");
+      Serial.println("[WS] Disconnected from server!");
       wsConnected = false;
       digitalWrite(LED_HIJAU, LOW);
+      digitalWrite(LED_MERAH, LOW);
       break;
       
     case WStype_TEXT:
-      Serial.printf("[WS] Text: %s\n", payload);
+      Serial.printf("[WS] Text message: %s\n", payload);
       break;
       
     case WStype_BIN:
@@ -320,17 +364,26 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       
     case WStype_ERROR:
       Serial.printf("[WS] Error: %s\n", payload);
+      digitalWrite(LED_MERAH, HIGH);
+      delay(200);
+      digitalWrite(LED_MERAH, LOW);
       break;
       
     case WStype_PING:
+      // Serial.println("[WS] Ping received");
+      break;
+      
     case WStype_PONG:
-      // Handle ping/pong
+      // Serial.println("[WS] Pong received");
       break;
   }
 }
 
 void sendButtonPressWS(int team) {
-  if (!wsConnected) return;
+  if (!wsConnected) {
+    Serial.println("[WS] Not connected, cannot send button press");
+    return;
+  }
   
   buttonPressCount++;
   
@@ -363,14 +416,30 @@ void sendButtonPressWS(int team) {
   buffer[12] = random(256);
   buffer[13] = 0;
   
-  webSocket.sendBIN(buffer, 14);
+  bool sent = webSocket.sendBIN(buffer, 14);
   
-  Serial.printf("[WS] Button press sent: Team %s, Seq %d\n", 
-                TEAM_MAPPINGS[team-1].teamName, sequence);
+  if (sent) {
+    Serial.printf("[WS] Button press sent: Team %s, Seq %d\n", 
+                  TEAM_MAPPINGS[team-1].teamName, sequence);
+  } else {
+    Serial.printf("[WS] Failed to send button press for Team %s\n", 
+                  TEAM_MAPPINGS[team-1].teamName);
+  }
 }
 
 void sendHeartbeatWS() {
-  if (!wsConnected) return;
+  if (!wsConnected) {
+    // Coba reconnect jika tidak terhubung
+    Serial.println("[WS] Not connected, attempting to reconnect...");
+    webSocket.disconnect();
+    delay(100);
+    if (WS_PORT == 443) {
+      webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    } else {
+      webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    }
+    return;
+  }
   
   heartbeatCount++;
   
@@ -406,14 +475,31 @@ void sendHeartbeatWS() {
   webSocket.sendBIN(buffer, 16);
   
   if (heartbeatCount % 10 == 0) {
-    Serial.printf("[WS] Heartbeat #%d sent\n", heartbeatCount);
+    Serial.printf("[WS] Heartbeat #%d sent (RSSI: %d, Heap: %d)\n", 
+                  heartbeatCount, rssi, heap);
   }
+}
+
+void sendModuleStatus() {
+  if (!wsConnected) return;
+  
+  uint8_t buffer[3];
+  buffer[0] = MSG_MODULE_STATUS;
+  buffer[1] = detectedModules;
+  buffer[2] = activeTeamCount;
+  
+  webSocket.sendBIN(buffer, 3);
+  Serial.printf("[WS] Module status sent: %d modules, %d teams\n", 
+                detectedModules, activeTeamCount);
 }
 
 void handleWebSocketBinary(uint8_t *payload, size_t length) {
   if (length < 1) return;
   
   uint8_t msgType = payload[0];
+  
+  Serial.printf("[WS] Received binary message type: 0x%02X, length: %d\n", 
+                msgType, length);
   
   switch(msgType) {
     case MSG_LOCK_ACQUIRED:
@@ -453,8 +539,9 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
         uint8_t reason = payload[2];
         uint8_t lockedByTeam = payload[3];
         
-        Serial.printf("[WS] Lock denied for Team %s: Reason %d, Locked by %d\n",
-                     TEAM_MAPPINGS[team-1].teamName, reason, lockedByTeam);
+        Serial.printf("[WS] Lock denied for Team %s: Reason %d, Locked by Team %s\n",
+                     TEAM_MAPPINGS[team-1].teamName, reason, 
+                     lockedByTeam > 0 ? TEAM_MAPPINGS[lockedByTeam-1].teamName : "None");
         
         // Release LED feedback
         setTeamLED(team, false);
@@ -471,8 +558,7 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       break;
       
     case MSG_LOCK_RELEASED:
-    case MSG_FORCE_UNLOCK:
-      Serial.println("[WS] System unlocked");
+      Serial.println("[WS] System unlocked (lock released)");
       resetLockState();
       
       // Feedback
@@ -484,6 +570,23 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       digitalWrite(LED_MERAH, HIGH);
       delay(100);
       digitalWrite(LED_MERAH, LOW);
+      break;
+      
+    case MSG_FORCE_UNLOCK:
+      Serial.println("[WS] System unlocked (force unlock)");
+      resetLockState();
+      
+      // Feedback
+      digitalWrite(LED_HIJAU, LOW);
+      digitalWrite(LED_MERAH, LOW);
+      delay(100);
+      digitalWrite(LED_HIJAU, HIGH);
+      digitalWrite(LED_MERAH, HIGH);
+      delay(100);
+      digitalWrite(LED_HIJAU, LOW);
+      digitalWrite(LED_MERAH, LOW);
+      delay(100);
+      digitalWrite(LED_HIJAU, HIGH);
       break;
       
     case MSG_CONFIG_UPDATE:
@@ -505,8 +608,20 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       break;
       
     case MSG_SCORE_UPDATE:
-      // Handle score updates if needed
+      if (length >= 6) {
+        uint8_t team = payload[1];
+        int32_t score = (payload[2] << 24) | (payload[3] << 16) | (payload[4] << 8) | payload[5];
+        Serial.printf("[WS] Score update: Team %s = %d\n", 
+                     TEAM_MAPPINGS[team-1].teamName, score);
+      }
       break;
+      
+    case MSG_SYSTEM_STATUS:
+      Serial.println("[WS] System status received");
+      break;
+      
+    default:
+      Serial.printf("[WS] Unknown message type: 0x%02X\n", msgType);
   }
 }
 
@@ -517,24 +632,31 @@ void processButtonPress(int team) {
   int idx = team - 1;
   
   // Check if team is enabled
-  if (enabledTeams[idx] != 1) return;
+  if (enabledTeams[idx] != 1) {
+    Serial.printf("[BUTTON] Team %s is disabled, ignoring\n", TEAM_MAPPINGS[idx].teamName);
+    return;
+  }
   
   // Check global lock
   if (globalButtonLock) {
     if (millis() - globalLockStartTime > 5000) {
       globalButtonLock = false; // Timeout after 5 seconds
     } else {
+      Serial.println("[BUTTON] Global lock active, ignoring");
       return;
     }
   }
   
   // Check if already locked by another team
   if (lockActive && activeTeam != team) {
+    Serial.printf("[BUTTON] System locked by Team %s, ignoring Team %s\n", 
+                 TEAM_MAPPINGS[activeTeam-1].teamName, TEAM_MAPPINGS[idx].teamName);
     return;
   }
   
   // Check if already processed
   if (buttonStates[idx].lockConfirmed) {
+    Serial.printf("[BUTTON] Team %s already lock confirmed, ignoring\n", TEAM_MAPPINGS[idx].teamName);
     return;
   }
   
@@ -622,16 +744,17 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-    }
-    
-    Serial.printf("[JURY] Correct for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
-    
-    // Feedback
-    for (int i = 0; i < 2; i++) {
-      digitalWrite(LED_HIJAU, LOW);
-      delay(80);
-      digitalWrite(LED_HIJAU, HIGH);
-      delay(80);
+      Serial.printf("[JURY] Correct for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
+      
+      // Feedback
+      for (int i = 0; i < 2; i++) {
+        digitalWrite(LED_HIJAU, LOW);
+        delay(80);
+        digitalWrite(LED_HIJAU, HIGH);
+        delay(80);
+      }
+    } else {
+      Serial.println("[JURY] WebSocket not connected, cannot send jury action");
     }
     
     lastJuryPress = now;
@@ -654,16 +777,17 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-    }
-    
-    Serial.printf("[JURY] Wrong for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
-    
-    // Feedback
-    for (int i = 0; i < 2; i++) {
-      digitalWrite(LED_MERAH, HIGH);
-      delay(80);
-      digitalWrite(LED_MERAH, LOW);
-      delay(80);
+      Serial.printf("[JURY] Wrong for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
+      
+      // Feedback
+      for (int i = 0; i < 2; i++) {
+        digitalWrite(LED_MERAH, HIGH);
+        delay(80);
+        digitalWrite(LED_MERAH, LOW);
+        delay(80);
+      }
+    } else {
+      Serial.println("[JURY] WebSocket not connected, cannot send jury action");
     }
     
     lastJuryPress = now;
@@ -683,6 +807,21 @@ void resetLockState() {
   }
   
   clearAllLEDs();
+}
+
+// ========== TEST WEBSOCKET CONNECTION ==========
+void testWebSocketConnection() {
+  if (!wsConnected) {
+    Serial.println("[TEST] WebSocket not connected, attempting to reconnect...");
+    webSocket.disconnect();
+    delay(1000);
+    if (WS_PORT == 443) {
+      webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    } else {
+      webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
+    }
+    webSocket.enableHeartbeat(15000, 3000, 2);
+  }
 }
 
 // ========== MAIN LOOP ==========
@@ -708,6 +847,7 @@ void loop() {
       wifiResetActive = false;
       digitalWrite(LED_MERAH, LOW);
       digitalWrite(LED_HIJAU, HIGH);
+      Serial.println("[RESET] Reset mode cancelled");
     }
     
     return;
@@ -718,6 +858,12 @@ void loop() {
     digitalWrite(LED_HIJAU, HIGH);
   } else {
     digitalWrite(LED_HIJAU, LOW);
+    // Blink red LED if not connected
+    if (millis() % 1000 < 500) {
+      digitalWrite(LED_MERAH, HIGH);
+    } else {
+      digitalWrite(LED_MERAH, LOW);
+    }
   }
   
   // Scan buttons
@@ -762,6 +908,9 @@ void loop() {
     
     if (wsConnected) {
       sendHeartbeatWS();
+    } else {
+      Serial.println("[HEARTBEAT] WebSocket not connected, skipping heartbeat");
+      testWebSocketConnection();
     }
     
     // Update WiFi RSSI
@@ -771,6 +920,17 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("WiFi lost, reconnecting...");
       WiFi.reconnect();
+    }
+  }
+  
+  // Check for WebSocket connection status
+  static unsigned long lastConnectionCheck = 0;
+  if (millis() - lastConnectionCheck > 60000) { // Every 60 seconds
+    lastConnectionCheck = millis();
+    
+    if (!wsConnected) {
+      Serial.println("[CONNECTION] WebSocket disconnected, attempting to reconnect...");
+      testWebSocketConnection();
     }
   }
   

@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -22,26 +22,29 @@ const TEAM_COUNT = 12;
 const isProduction = process.env.NODE_ENV === 'production';
 
 // ===== WEBSOCKET SERVER UNTUK ESP32 =====
+// PERBAIKAN: Hapus port terpisah, gunakan port yang sama
 const wss = new WebSocketServer({ 
-  port: WS_PORT,
-  clientTracking: true,
-  perMessageDeflate: {
-    zlibDeflateOptions: {
-      chunkSize: 1024,
-      memLevel: 7,
-      level: 3
-    },
-    zlibInflateOptions: {
-      chunkSize: 10 * 1024
-    },
-    clientNoContextTakeover: true,
-    serverNoContextTakeover: true,
-    serverMaxWindowBits: 10,
-    concurrencyLimit: 10,
-    threshold: 1024
-  }
+  noServer: true  // Tidak membuat server sendiri
 });
 
+// Kemudian di bagian startServer atau di http.on('upgrade'):
+http.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+  
+  // Tangani WebSocket ESP32
+  if (pathname === '/esp32ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } 
+  // Tangani Socket.IO
+  else if (pathname === '/socket.io/') {
+    // Biarkan Socket.IO menangani
+  } 
+  else {
+    socket.destroy();
+  }
+});
 // State untuk koneksi WebSocket ESP32
 let esp32WebSocket = null;
 let esp32WebSocketId = null;
