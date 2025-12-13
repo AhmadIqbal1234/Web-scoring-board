@@ -21,10 +21,17 @@ let esp32Status = {
   activeTeams: 0,
   modulesDetected: 0,
   wifiRSSI: 0,
+  moduleStates: [false, false, false, false],
+  lastModuleUpdate: null,
   heartbeatCount: 0,
   lastRSSIUpdate: null,
   rssiHistory: []
 };
+
+// ===== REAL-TIME MONITORING VARIABLES =====
+let moduleUpdateInterval = null;
+let lastModuleChangeTime = 0;
+let moduleChangeHistory = [];
 
 // ===== LOGGER =====
 const adminLogger = {
@@ -52,6 +59,313 @@ const adminLogger = {
 // ===== FUNGSI BANTU =====
 function getTeamLetter(index) {
   return String.fromCharCode(64 + index);
+}
+
+function getModuleColor(moduleIndex) {
+  const colors = ['#4caf50', '#2196f3', '#ff9800', '#9c27b0'];
+  return colors[moduleIndex] || '#607d8b';
+}
+
+// ===== REAL-TIME MODULE DISPLAY =====
+function initializeRealTimeModuleDisplay() {
+  const moduleDisplay = document.getElementById("moduleStatusDisplay");
+  if (!moduleDisplay) {
+    console.error("Module display element not found");
+    return;
+  }
+  
+  // Create module status display
+  moduleDisplay.innerHTML = `
+    <div class="module-status-container">
+      <h3>STATUS MODUL REAL-TIME</h3>
+      <div class="modules-grid">
+        <div class="module-card" data-module="0">
+          <div class="module-header">MODUL 1 (0x20)</div>
+          <div class="module-status" id="module-status-0">Mengecek...</div>
+          <div class="module-teams" id="module-teams-0">Tim: A, B, C</div>
+          <div class="module-indicator" id="module-indicator-0"></div>
+        </div>
+        <div class="module-card" data-module="1">
+          <div class="module-header">MODUL 2 (0x21)</div>
+          <div class="module-status" id="module-status-1">Mengecek...</div>
+          <div class="module-teams" id="module-teams-1">Tim: D, E, F</div>
+          <div class="module-indicator" id="module-indicator-1"></div>
+        </div>
+        <div class="module-card" data-module="2">
+          <div class="module-header">MODUL 3 (0x22)</div>
+          <div class="module-status" id="module-status-2">Mengecek...</div>
+          <div class="module-teams" id="module-teams-2">Tim: G, H, I</div>
+          <div class="module-indicator" id="module-indicator-2"></div>
+        </div>
+        <div class="module-card" data-module="3">
+          <div class="module-header">MODUL 4 (0x23)</div>
+          <div class="module-status" id="module-status-3">Mengecek...</div>
+          <div class="module-teams" id="module-teams-3">Tim: J, K, L</div>
+          <div class="module-indicator" id="module-indicator-3"></div>
+        </div>
+      </div>
+      <div class="module-summary">
+        <div class="summary-item">
+          <span class="summary-label">Total Modul:</span>
+          <span class="summary-value" id="total-modules">0/4</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Total Tim Aktif:</span>
+          <span class="summary-value" id="total-teams">0/12</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Update Terakhir:</span>
+          <span class="summary-value" id="last-update">-</span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Add CSS styles
+  const style = document.createElement('style');
+  style.textContent = `
+    .module-status-container {
+      background: #f5f5f5;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 20px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .module-status-container h3 {
+      margin-top: 0;
+      color: #333;
+      border-bottom: 2px solid #4caf50;
+      padding-bottom: 10px;
+    }
+    
+    .modules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin: 15px 0;
+    }
+    
+    .module-card {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      transition: all 0.3s ease;
+      border-left: 4px solid #ddd;
+    }
+    
+    .module-card.connected {
+      border-left-color: #4caf50;
+      background: #f1f8e9;
+    }
+    
+    .module-card.disconnected {
+      border-left-color: #f44336;
+      background: #ffebee;
+    }
+    
+    .module-header {
+      font-weight: bold;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    
+    .module-status {
+      font-size: 14px;
+      margin-bottom: 5px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    
+    .module-status.connected {
+      background: #4caf50;
+      color: white;
+    }
+    
+    .module-status.disconnected {
+      background: #f44336;
+      color: white;
+    }
+    
+    .module-teams {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    
+    .module-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    
+    .module-indicator.connected {
+      background: #4caf50;
+      animation: pulse 2s infinite;
+    }
+    
+    .module-indicator.disconnected {
+      background: #f44336;
+    }
+    
+    .module-summary {
+      display: flex;
+      justify-content: space-between;
+      background: white;
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 15px;
+      border-top: 1px solid #eee;
+    }
+    
+    .summary-item {
+      text-align: center;
+    }
+    
+    .summary-label {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    
+    .summary-value {
+      display: block;
+      font-size: 16px;
+      font-weight: bold;
+      color: #333;
+    }
+    
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    
+    @keyframes highlight {
+      0% { background: #fff9c4; }
+      100% { background: white; }
+    }
+    
+    .module-card.highlight {
+      animation: highlight 1s ease;
+    }
+  `;
+  document.head.appendChild(style);
+  
+  // Start update interval
+  moduleUpdateInterval = setInterval(updateModuleDisplay, 1000);
+  
+  adminLogger.info("Real-time module display initialized");
+}
+
+function updateModuleDisplay() {
+  // Update each module card
+  for (let i = 0; i < 4; i++) {
+    const moduleCard = document.querySelector(`.module-card[data-module="${i}"]`);
+    const statusEl = document.getElementById(`module-status-${i}`);
+    const indicatorEl = document.getElementById(`module-indicator-${i}`);
+    const teamsEl = document.getElementById(`module-teams-${i}`);
+    
+    if (moduleCard && statusEl && indicatorEl) {
+      const isConnected = esp32Status.moduleStates[i] || false;
+      
+      // Update status text
+      statusEl.textContent = isConnected ? "TERHUBUNG" : "TERPUTUS";
+      statusEl.className = `module-status ${isConnected ? 'connected' : 'disconnected'}`;
+      
+      // Update indicator
+      indicatorEl.className = `module-indicator ${isConnected ? 'connected' : 'disconnected'}`;
+      
+      // Update card style
+      moduleCard.className = `module-card ${isConnected ? 'connected' : 'disconnected'}`;
+      
+      // Update teams display
+      if (teamsEl) {
+        const teamLetters = getTeamsForModule(i);
+        teamsEl.textContent = `Tim: ${teamLetters.join(', ')}`;
+      }
+      
+      // Add tooltip
+      moduleCard.title = `Modul ${i+1} (0x${(0x20 + i).toString(16).toUpperCase()}) - ${isConnected ? 'Terhubung' : 'Terputus'}`;
+    }
+  }
+  
+  // Update summary
+  const totalModulesEl = document.getElementById("total-modules");
+  const totalTeamsEl = document.getElementById("total-teams");
+  const lastUpdateEl = document.getElementById("last-update");
+  
+  if (totalModulesEl) {
+    const connectedModules = esp32Status.moduleStates.filter(state => state).length;
+    totalModulesEl.textContent = `${connectedModules}/4`;
+    totalModulesEl.style.color = connectedModules === 4 ? '#4caf50' : 
+                                 connectedModules >= 2 ? '#ff9800' : '#f44336';
+  }
+  
+  if (totalTeamsEl) {
+    totalTeamsEl.textContent = `${esp32Status.activeTeams || 0}/12`;
+    totalTeamsEl.style.color = esp32Status.activeTeams === 12 ? '#4caf50' :
+                               esp32Status.activeTeams >= 6 ? '#ff9800' : '#f44336';
+  }
+  
+  if (lastUpdateEl && esp32Status.lastModuleUpdate) {
+    const updateTime = new Date(esp32Status.lastModuleUpdate);
+    const now = new Date();
+    const diffSeconds = Math.floor((now - updateTime) / 1000);
+    
+    if (diffSeconds < 10) {
+      lastUpdateEl.textContent = "Baru saja";
+      lastUpdateEl.style.color = "#4caf50";
+    } else if (diffSeconds < 60) {
+      lastUpdateEl.textContent = `${diffSeconds} detik lalu`;
+      lastUpdateEl.style.color = "#ff9800";
+    } else {
+      lastUpdateEl.textContent = `${Math.floor(diffSeconds / 60)} menit lalu`;
+      lastUpdateEl.style.color = diffSeconds < 300 ? "#ff9800" : "#f44336";
+    }
+  }
+}
+
+function getTeamsForModule(moduleIndex) {
+  const teamLetters = [];
+  const moduleAddress = 0x20 + moduleIndex;
+  
+  for (let team = 1; team <= 12; team++) {
+    const mapping = TEAM_MAPPINGS.find(t => t.teamNumber === team);
+    if (mapping && mapping.moduleAddress === moduleAddress) {
+      teamLetters.push(getTeamLetter(team));
+    }
+  }
+  
+  return teamLetters;
+}
+
+function highlightModuleChange(moduleIndex, connected) {
+  const moduleCard = document.querySelector(`.module-card[data-module="${moduleIndex}"]`);
+  if (moduleCard) {
+    moduleCard.classList.add('highlight');
+    setTimeout(() => moduleCard.classList.remove('highlight'), 1000);
+    
+    // Log change
+    const change = {
+      module: moduleIndex,
+      address: `0x${(0x20 + moduleIndex).toString(16).toUpperCase()}`,
+      connected: connected,
+      timestamp: new Date().toISOString()
+    };
+    
+    moduleChangeHistory.unshift(change);
+    if (moduleChangeHistory.length > 10) {
+      moduleChangeHistory.pop();
+    }
+    
+    adminLogger.esp32(`Module ${moduleIndex+1} ${connected ? 'connected' : 'disconnected'}`, change);
+  }
 }
 
 // ===== EDIT SCORE FEATURE FUNCTIONS =====
@@ -220,6 +534,15 @@ function updateESP32Status(status) {
   
   const sebelumnyaOnline = esp32Status.connected;
   
+  // Check for module state changes
+  if (status.moduleStates && Array.isArray(status.moduleStates)) {
+    for (let i = 0; i < 4; i++) {
+      if (status.moduleStates[i] !== esp32Status.moduleStates[i]) {
+        highlightModuleChange(i, status.moduleStates[i]);
+      }
+    }
+  }
+  
   esp32Status = { ...esp32Status, ...status };
   
   if (status.rssiHistory && Array.isArray(status.rssiHistory)) {
@@ -370,6 +693,9 @@ function updateESP32Status(status) {
       socketId: esp32Status.socketId
     });
   }
+  
+  // Update module display
+  updateModuleDisplay();
 }
 
 // ===== UPDATE TIMESTAMP =====
@@ -586,6 +912,7 @@ function initializeESP32Controls() {
       adminLogger.esp32('Tab aktif, refresh status');
       refreshESP32Status();
       socket.emit("getESP32Status");
+      socket.emit("getESP32ModuleDetails");
     }
   });
   
@@ -599,6 +926,7 @@ function initializeESP32Controls() {
 function startESP32RealTimePolling() {
   setInterval(() => {
     socket.emit("getESP32Status");
+    socket.emit("getESP32ModuleDetails");
     
     fetch('/esp32status')
       .then(r => {
@@ -884,6 +1212,8 @@ function refreshESP32Data() {
         modulesDetected: data.modulTerdeteksi,
         activeTeams: data.timAktif,
         wifiRSSI: data.sinyalWiFi ? parseInt(data.sinyalWiFi) : null,
+        moduleStates: data.statusModul || [false, false, false, false],
+        lastModuleUpdate: data.lastModuleUpdate,
         rssiHistory: data.rssiHistory || []
       });
       
@@ -891,6 +1221,7 @@ function refreshESP32Data() {
         modules: data.modulTerdeteksi,
         teams: data.timAktif,
         rssi: data.sinyalWiFi,
+        moduleStates: data.statusModul,
         historyCount: data.rssiHistory ? data.rssiHistory.length : 0
       });
     })
@@ -963,7 +1294,8 @@ function testESP32Connection() {
             ip: data.detail.ip,
             modulesDetected: data.detail.modulTerdeteksi,
             activeTeams: data.detail.timAktif,
-            wifiRSSI: data.detail.sinyalWiFi
+            wifiRSSI: data.detail.sinyalWiFi,
+            moduleStates: data.detail.statusModul || [false, false, false, false]
           });
         } else {
           resultDiv.innerHTML = `
@@ -1281,13 +1613,14 @@ socket.on("connect", () => {
   
   setTimeout(() => {
     socket.emit("getESP32Status");
+    socket.emit("getESP32ModuleDetails");
     refreshESP32Status();
     fetchFullState();
   }, 500);
 });
 
 socket.on("disconnect", () => {
-  adminLogger.warn('Admin disconnected from WebSocket');
+  adminLogger.warning('Admin disconnected from WebSocket');
   const statusDot = document.querySelector('.status-dot');
   if (statusDot) {
     statusDot.style.background = '#f44336';
@@ -1350,9 +1683,34 @@ socket.on("esp32Status", (status) => {
     modulesDetected: status.modulesDetected,
     activeTeams: status.activeTeams,
     wifiRSSI: status.wifiRSSI,
+    moduleStates: status.moduleStates,
     socketId: status.socketId
   });
   updateESP32Status(status);
+});
+
+socket.on("esp32ModuleUpdate", (data) => {
+  console.log("ESP32 Module Update received:", data);
+  
+  updateESP32Status({
+    modulesDetected: data.modulesDetected,
+    activeTeams: data.activeTeams,
+    wifiRSSI: data.wifiRSSI,
+    moduleStates: data.moduleStates,
+    lastModuleUpdate: data.timestamp
+  });
+  
+  // Show notification for significant changes
+  const connectedModules = data.moduleStates.filter(state => state).length;
+  if (connectedModules !== esp32Status.modulesDetected) {
+    showNotification(`Modul berubah: ${connectedModules} dari 4 terhubung`, "info");
+  }
+});
+
+socket.on("esp32StateChange", (data) => {
+  console.log("ESP32 State Change detected:", data);
+  
+  showNotification(`ESP32 state updated: ${data.modulesDetected} modul, ${data.activeTeams} tim aktif`, "info");
 });
 
 socket.on("esp32Warning", (data) => {
@@ -1751,6 +2109,8 @@ async function loadInitialData() {
       modulesDetected: esp32Res.modulTerdeteksi,
       activeTeams: esp32Res.timAktif,
       wifiRSSI: esp32Res.sinyalWiFi ? parseInt(esp32Res.sinyalWiFi) : null,
+      moduleStates: esp32Res.statusModul || [false, false, false, false],
+      lastModuleUpdate: esp32Res.lastModuleUpdate,
       rssiHistory: esp32Res.rssiHistory || []
     });
     
@@ -1767,7 +2127,8 @@ async function loadInitialData() {
     adminLogger.info('Initial data loaded successfully', {
       lockState: lockState,
       timerRunning: timerRes?.timerRunning,
-      esp32Connected: esp32Res.terhubung
+      esp32Connected: esp32Res.terhubung,
+      modulesDetected: esp32Res.modulTerdeteksi
     });
     
     return true;
@@ -1788,6 +2149,7 @@ function initializeAdmin() {
     initializeESP32Controls();
     initializeAutoPenaltyToggle();
     initializeEditScoreFeature();
+    initializeRealTimeModuleDisplay();
     updateTimerStatus('TIDAK AKTIF', 0);
     
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -1824,6 +2186,7 @@ function initializeAdmin() {
     
     createTeamControls();
     initializeJuryControls();
+    initializeRealTimeModuleDisplay();
     updateTimerStatus('TIDAK AKTIF', 0);
   });
 }
@@ -1835,8 +2198,8 @@ document.addEventListener('DOMContentLoaded', function() {
   
   const versionInfo = document.createElement('div');
   versionInfo.className = 'version-info';
-  versionInfo.textContent = 'v2.2.1';
-  versionInfo.title = 'Sistem dengan atomic lock, state recovery, WebSocket integration, dan edit skor manual';
+  versionInfo.textContent = 'v2.2.2';
+  versionInfo.title = 'Sistem dengan real-time monitoring, Plug & Play module detection, dan edit skor manual';
   
   const header = document.querySelector('.admin-header');
   if (header) {

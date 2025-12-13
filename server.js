@@ -1,4 +1,4 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -105,7 +105,7 @@ const wss = new WebSocketServer({
   noServer: true
 });
 
-// PERBAIKAN: Setup upgrade handler di awal
+// Setup upgrade handler
 http.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
   
@@ -243,7 +243,9 @@ let esp32Status = {
   heartbeatCount: 0,
   modulesDetected: 0,
   activeTeams: 0,
-  wifiRSSI: 0
+  wifiRSSI: 0,
+  moduleStates: [false, false, false, false], // Status per modul
+  lastModuleUpdate: null
 };
 
 // ===== SISTEM LOG OPTIMIZED =====
@@ -451,7 +453,7 @@ wss.on('connection', function connection(ws, req) {
   esp32Status.ip = clientIP;
   esp32Status.connectionType = "websocket";
   
-  // PERBAIKAN: Kirim status ke semua client Socket.IO termasuk admin
+  // Kirim status ke semua client Socket.IO termasuk admin
   io.emit("esp32Status", esp32Status);
   
   // Send welcome message
@@ -504,7 +506,7 @@ wss.on('connection', function connection(ws, req) {
     esp32Status.connected = false;
     esp32Status.connectionType = "websocket_disconnected";
     
-    // PERBAIKAN: Kirim update ke semua client
+    // Kirim update ke semua client
     io.emit("esp32Status", esp32Status);
     
     logger.esp32(`ESP32 WebSocket disconnected: ${socketId}`);
@@ -571,6 +573,9 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
     socketId: socketId
   });
   
+  // Kirim update ke admin panel
+  io.emit("esp32Status", esp32Status);
+  
   // Cek jika tim diaktifkan
   if (!teamToggleState[team - 1]) {
     logger.info(`ESP32: Team ${getTeamLetter(team)} is disabled, ignoring press`);
@@ -618,7 +623,7 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
       esp32WebSocket.send(acquiredMsg);
     }
     
-    // PERBAIKAN PENTING: Kirim event buzz ke SEMUA client Socket.IO (termasuk admin)
+    // Kirim event buzz ke SEMUA client Socket.IO (termasuk admin)
     io.emit("buzz", { 
       team, 
       lockId: lockState.lockId,
@@ -664,6 +669,7 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
   const uptime = (buffer[9] << 24) | (buffer[10] << 16) | (buffer[11] << 8) | buffer[12];
   const lockStatus = buffer[13];
   const lockedTeam = buffer[14];
+  const stateChanged = buffer[15]; // Flag perubahan state
   
   // Update ESP32 status
   esp32Status.modulesDetected = modulesDetected;
@@ -673,8 +679,24 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
   esp32Status.lastHeartbeat = new Date();
   esp32Status.heartbeatCount++;
   
-  // PERBAIKAN: Update semua client
+  // Update semua client
   io.emit("esp32Status", esp32Status);
+  
+  // Jika ada flag perubahan state, broadcast ke semua admin
+  if (stateChanged === 1) {
+    logger.esp32(`ESP32 state changed detected, broadcasting to all admins`, {
+      modules: modulesDetected,
+      teams: activeTeams,
+      rssi: rssi
+    });
+    
+    io.emit("esp32StateChange", {
+      modulesDetected: modulesDetected,
+      activeTeams: activeTeams,
+      wifiRSSI: rssi,
+      timestamp: new Date().toISOString()
+    });
+  }
   
   // Jika lock status tidak sync, kirim update
   if (lockState.locked !== (lockStatus === 1) || 
@@ -689,27 +711,51 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
     heap: heap,
     uptime: uptime,
     lockStatus: lockStatus,
-    lockedTeam: lockedTeam
+    lockedTeam: lockedTeam,
+    stateChanged: stateChanged
   });
 }
 
 // ===== HANDLE ESP32 MODULE STATUS =====
 function handleESP32ModuleStatus(buffer, socketId, clientIP) {
-  if (buffer.length < 3) return;
+  if (buffer.length < 10) return;
   
   const modulesDetected = buffer[1];
   const activeTeams = buffer[2];
   
+  // Baca status per modul (4 modul)
+  const moduleStates = [
+    buffer[3] === 0x01,
+    buffer[4] === 0x01,
+    buffer[5] === 0x01,
+    buffer[6] === 0x01
+  ];
+  
+  const rssi = (buffer[7] << 8) | buffer[8];
+  
   esp32Status.modulesDetected = modulesDetected;
   esp32Status.activeTeams = activeTeams;
+  esp32Status.wifiRSSI = rssi;
+  esp32Status.moduleStates = moduleStates;
   esp32Status.lastActivity = new Date();
+  esp32Status.lastModuleUpdate = new Date();
   
-  logger.esp32(`ESP32 module status update`, {
+  logger.esp32(`ESP32 enhanced module status update`, {
     modules: modulesDetected,
-    teams: activeTeams
+    teams: activeTeams,
+    rssi: rssi,
+    moduleStates: moduleStates
   });
   
+  // Broadcast ke semua client dengan detail modul
   io.emit("esp32Status", esp32Status);
+  io.emit("esp32ModuleUpdate", {
+    modulesDetected: modulesDetected,
+    activeTeams: activeTeams,
+    wifiRSSI: rssi,
+    moduleStates: moduleStates,
+    timestamp: new Date().toISOString()
+  });
 }
 
 // ===== HANDLE ESP32 JURY ACTION =====
@@ -739,7 +785,7 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   // SIMPAN KE FILE
   saveScoresOnly();
   
-  // PERBAIKAN: Kirim update ke SEMUA client
+  // Kirim update ke SEMUA client
   io.emit("update", { team, score: scores[team - 1] });
   io.emit("scoring", { team, isCorrect });
   
@@ -762,7 +808,7 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   sendLockStateToESP32();
   sendScoreUpdateToESP32(team, scores[team - 1]);
   
-  // PERBAIKAN: Kirim lockstate update ke SEMUA client
+  // Kirim lockstate update ke SEMUA client
   io.emit("lockstate", lockState);
 }
 
@@ -773,7 +819,7 @@ function sendConfigToESP32() {
     return;
   }
   
-  // PERBAIKAN: Konversi nilai minus ke byte dengan benar dan tambah logging
+  // Konversi nilai minus ke byte dengan benar
   const minusByte = config.minus < 0 ? (256 + config.minus) : config.minus;
   
   // Debug logging
@@ -900,7 +946,7 @@ function monitorESP32WebSocket() {
       esp32Status.connected = false;
       esp32Status.connectionType = "websocket_timeout";
       
-      // PERBAIKAN: Update semua client
+      // Update semua client
       io.emit("esp32Status", esp32Status);
     }
   }
@@ -936,7 +982,7 @@ function handleAutoPenalty() {
   // SIMPAN KE FILE
   saveScoresOnly();
   
-  // PERBAIKAN: Kirim update ke SEMUA client
+  // Kirim update ke SEMUA client
   io.emit("update", { team: activeTeam, score: scores[activeTeam - 1] });
   io.emit("scoring", { team: activeTeam, isCorrect: false });
   
@@ -951,7 +997,7 @@ function handleAutoPenalty() {
     timerInterval = null;
   }
   
-  // PERBAIKAN: Kirim event ke SEMUA client
+  // Kirim event ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", { reason: "auto_penalty_applied" });
   io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
@@ -994,7 +1040,7 @@ function unlockSystemOnTimerEnd() {
     // Kirim ke ESP32
     sendLockStateToESP32();
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("lockstate", lockState);
     io.emit("timerReset", { reason: "timer_expired" });
     io.emit("systemUnlocked", { 
@@ -1087,7 +1133,7 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
     esp32Status.lastHeartbeat = new Date();
   }
   
-  // PERBAIKAN: Update semua client
+  // Update semua client
   io.emit("esp32Status", esp32Status);
   
   logger.esp32(`ESP32 update: ${activityType}`, {
@@ -1116,7 +1162,7 @@ function checkESP32Status() {
       esp32Status.connected = false;
       esp32Status.connectionType = "timeout";
       
-      // PERBAIKAN: Update semua client
+      // Update semua client
       io.emit("esp32Status", esp32Status);
     }
   }
@@ -1136,7 +1182,7 @@ function startTimer(activeTeam = null) {
   timeRemaining = config.timerDuration;
   const currentActiveTeam = activeTeam || lockState.activeTeam;
 
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("timerStart", { 
     duration: config.timerDuration,
     lockId: lockState.lockId,
@@ -1153,7 +1199,7 @@ function startTimer(activeTeam = null) {
   timerInterval = setInterval(() => {
     timeRemaining--;
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("timerUpdate", { 
       timeRemaining,
       lockId: lockState.lockId,
@@ -1203,7 +1249,7 @@ function stopTimer(activeTeam = null) {
     releaseAtomicLock();
   }
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1240,7 +1286,7 @@ function resetTimer() {
     releaseAtomicLock();
   }
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1276,7 +1322,7 @@ function forceUnlockSystem() {
   // Kirim ke ESP32 via WebSocket
   sendForceUnlockToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", {
     lockId: lockState.lockId,
@@ -1292,8 +1338,6 @@ function playBuzzerThenTeamAudio(team) {
   logger.audio(`Memulai urutan audio buzzer untuk Tim ${getTeamLetter(team)}`);
   
   const buzzerPlayed = timerAudio.playPreTeamAudio(team);
-  
-  // Timer tidak dimulai di sini, akan dimulai setelah buzzer selesai (di preTeamAudioFinished)
 }
 
 // ===== FUNGSI RESET TIMER TANPA LOCK =====
@@ -1311,7 +1355,7 @@ function resetTimerOnly() {
   isTimerRunning = false;
   timeRemaining = 0;
   
-  // PERBAIKAN: Kirim timerReset ke semua client meskipun sistem terkunci
+  // Kirim timerReset ke semua client meskipun sistem terkunci
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1467,7 +1511,7 @@ app.get("/update", (req, res) => {
     
     logger.lock(`Request DITERIMA: Tim ${getTeamLetter(team)} berhasil terkunci`);
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("lockstate", lockState);
     io.emit("buzz", { 
       team,
@@ -1488,7 +1532,7 @@ app.get("/update", (req, res) => {
     // SIMPAN KE FILE
     saveScoresOnly();
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("update", { team, score: scores[team - 1] });
     io.emit("scoring", { team, isCorrect: add > 0 });
     
@@ -1567,7 +1611,7 @@ app.get("/debug/timer/fix", (req, res) => {
   timeRemaining = 0;
   releaseAtomicLock();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1615,7 +1659,7 @@ app.get("/forceUnlockAll", (req, res) => {
   // Kirim ke ESP32
   sendForceUnlockToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", {
     lockId: lockState.lockId,
@@ -1675,7 +1719,8 @@ app.get("/debug/monitoring", (req, res) => {
     fields: {
       modulesDetected: esp32Status.modulesDetected,
       activeTeams: esp32Status.activeTeams,
-      wifiRSSI: esp32Status.wifiRSSI
+      wifiRSSI: esp32Status.wifiRSSI,
+      moduleStates: esp32Status.moduleStates
     }
   });
 });
@@ -1739,11 +1784,17 @@ if (fs.existsSync(audioDir)) {
 app.get("/", (req, res) => {
   res.json({ 
     status: "Sistem Scoring Kuis", 
-    versi: "2.0.0",
+    versi: "2.1.0",
     lingkungan: isProduction ? "produksi" : "pengembangan",
     siap: true,
     websocket_port: WS_PORT,
-    websocket_path: "/esp32ws"
+    websocket_path: "/esp32ws",
+    features: [
+      "Real-time module monitoring",
+      "Plug & Play module detection",
+      "WiFi signal monitoring",
+      "State persistence"
+    ]
   });
 });
 
@@ -1772,7 +1823,7 @@ app.get("/editScore", (req, res) => {
   // SIMPAN KE FILE
   saveScoresOnly();
   
-  // PERBAIKAN: Broadcast ke SEMUA client
+  // Broadcast ke SEMUA client
   io.emit("update", { team, score: score });
   
   // Kirim ke ESP32 jika terhubung
@@ -1809,7 +1860,7 @@ app.get("/toggleTeam", (req, res) => {
     currentState: teamToggleState
   });
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("teamToggleUpdate", {
     team: team,
     enabled: enabled
@@ -1831,7 +1882,7 @@ app.get("/enableAllTeams", (req, res) => {
   
   logger.info("All teams enabled");
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("allTeamsEnabled");
   
   res.json({ 
@@ -1849,7 +1900,7 @@ app.get("/disableAllTeams", (req, res) => {
   
   logger.info("All teams disabled");
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("allTeamsDisabled");
   
   res.json({ 
@@ -1964,7 +2015,10 @@ app.get("/debug/esp32", (req, res) => {
       `${Math.floor((now - esp32Status.lastActivity) / 1000)} detik` : "N/A",
     modulTerdeteksi: esp32Status.modulesDetected || 0,
     timAktif: esp32Status.activeTeams || 0,
-    sinyalWiFi: esp32Status.wifiRSSI || 0
+    sinyalWiFi: esp32Status.wifiRSSI || 0,
+    statusModul: esp32Status.moduleStates || [false, false, false, false],
+    lastModuleUpdate: esp32Status.lastModuleUpdate ? 
+      new Date(esp32Status.lastModuleUpdate).toLocaleTimeString('id-ID') : "Tidak ada"
   });
 });
 
@@ -1979,7 +2033,7 @@ app.get("/toggleAutoPenalty", (req, res) => {
   // Kirim konfigurasi ke ESP32
   sendConfigToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("autoPenaltyToggle", { enabled: isAutoPenaltyEnabled });
   
   res.json({ 
@@ -2027,7 +2081,7 @@ app.get("/preTeamAudioFinished", (req, res) => {
     }
     startTimer(team);
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("playTeamAudio", {
       team: team,
       audioFile: teamAudioFile,
@@ -2061,7 +2115,7 @@ app.get("/unlock", (req, res) => {
   // Kirim ke ESP32
   sendLockStateToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   
   res.json({ sukses: true, pesan: "Sistem dibuka dan timer direset", statusKunci: lockState });
@@ -2073,7 +2127,7 @@ app.get("/setconfig", (req, res) => {
   let minus = parseInt(req.query.minus);
   const timerDuration = parseInt(req.query.timerDuration);
   
-  // PERBAIKAN: Validasi input dan pastikan minus tetap negatif
+  // Validasi input dan pastikan minus tetap negatif
   if (!Number.isNaN(plus) && plus > 0) {
     config.plus = plus;
     logger.info(`Config updated: plus points = ${plus}`);
@@ -2103,7 +2157,7 @@ app.get("/setconfig", (req, res) => {
   // Kirim ke ESP32 via WebSocket
   sendConfigToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("config", config);
   io.emit("autoPenaltyConfig", { 
     diaktifkan: isAutoPenaltyEnabled,
@@ -2131,7 +2185,7 @@ app.get("/reset", (req, res) => {
     }
   }
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("reset", scores);
   io.emit("lockstate", lockState);
   
@@ -2183,7 +2237,8 @@ app.get("/testESP32Connection", (req, res) => {
       sejakAktivitasTerakhir: `${timeSinceLastActivity} detik`,
       modulTerdeteksi: esp32Status.modulesDetected,
       timAktif: esp32Status.activeTeams,
-      sinyalWiFi: esp32Status.wifiRSSI
+      sinyalWiFi: esp32Status.wifiRSSI,
+      statusModul: esp32Status.moduleStates
     },
     waktuRespon: new Date().toLocaleTimeString('id-ID'),
     saran: !isRecentlyActive ? "Cek koneksi WiFi ESP32 atau restart ESP32" : null
@@ -2213,7 +2268,7 @@ app.get("/debug/resetlock", (req, res) => {
   // Kirim ke ESP32
   sendLockStateToESP32();
   
-  // PERBAIKAN: Kirim ke SEMUA client
+  // Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", {
     lockId: lockState.lockId,
@@ -2360,7 +2415,7 @@ io.on("connection", (socket) => {
     esp32Status.ip = clientIP;
     esp32Status.connectionType = "koneksi_socket";
     
-    // PERBAIKAN: Kirim ke SEMUA client
+    // Kirim ke SEMUA client
     io.emit("esp32Status", esp32Status);
     
     socket.on("pingFromAdmin", (data, callback) => {
@@ -2388,6 +2443,21 @@ io.on("connection", (socket) => {
       esp32Status.lastActivity = new Date();
       io.emit("esp32Status", esp32Status);
     });
+    
+    // Handler untuk real-time module updates
+    socket.on("esp32ModuleUpdate", (data) => {
+      esp32Status.modulesDetected = data.modulesDetected || 0;
+      esp32Status.activeTeams = data.activeTeams || 0;
+      esp32Status.wifiRSSI = data.wifiRSSI || 0;
+      esp32Status.moduleStates = data.moduleStates || [false, false, false, false];
+      esp32Status.lastActivity = new Date();
+      esp32Status.lastModuleUpdate = new Date();
+      
+      io.emit("esp32Status", esp32Status);
+      io.emit("esp32ModuleUpdate", data);
+      
+      logger.esp32(`ESP32 module update via Socket.IO`, data);
+    });
   }
 
   // Kirim data awal ke client
@@ -2411,6 +2481,16 @@ io.on("connection", (socket) => {
 
   socket.on("getESP32Status", () => {
     socket.emit("esp32Status", esp32Status);
+  });
+  
+  socket.on("getESP32ModuleDetails", () => {
+    socket.emit("esp32ModuleDetails", {
+      modulesDetected: esp32Status.modulesDetected,
+      activeTeams: esp32Status.activeTeams,
+      wifiRSSI: esp32Status.wifiRSSI,
+      moduleStates: esp32Status.moduleStates,
+      lastModuleUpdate: esp32Status.lastModuleUpdate
+    });
   });
 
   // Event untuk kontrol timer
@@ -2441,7 +2521,7 @@ io.on("connection", (socket) => {
       }
       startTimer(team);
       
-      // PERBAIKAN: Kirim ke SEMUA client
+      // Kirim ke SEMUA client
       io.emit("playTeamAudio", {
         team: team,
         audioFile: teamAudioFile,
@@ -2533,7 +2613,7 @@ async function startServer() {
   
   http.listen(PORT, async () => {
     console.log('========================================');
-    console.log('SISTEM KUIS Ridwan and Team');
+    console.log('SISTEM KUIS Ridwan and Team - REAL-TIME v2.1');
     console.log('========================================');
     console.log(`State Persistence: ${fs.existsSync(STATE_FILE) ? 'AKTIF' : 'BARU'}`);
     console.log(`Skor yang dimuat: ${scores.join(', ')}`);

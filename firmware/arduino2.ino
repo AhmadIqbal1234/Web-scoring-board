@@ -14,7 +14,7 @@
 // ========== KONFIGURASI UNTUK RAILWAY SSL ==========
 const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app"; // Domain tanpa http://
 const int   WS_PORT = 443;                                                     // Port untuk WSS
-const char* WS_PATH = "/esp32ws";                                                 // Path WebSocket
+const char* WS_PATH = "/";                                                     // Path WebSocket
 const char* WIFI_AP_NAME = "Quiz_Config_WS";
 
 // ========== PIN DEFINITION ==========
