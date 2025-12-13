@@ -7,6 +7,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="css/admin.css" />
   <script>
+  // Force favicon load
   const favicon = document.createElement('link');
   favicon.rel = 'icon';
   favicon.href = 'tts/android-chrome-192x192.png?' + new Date().getTime();
@@ -143,6 +144,14 @@
           <button id="manualSync" class="admin-btn btn-sync">
             SYNC TIMER MANUAL
           </button>
+          
+          <button id="forceUnlockWS" class="admin-btn btn-danger">
+            FORCE UNLOCK (WS)
+          </button>
+          
+          <button id="fullStateRecovery" class="admin-btn btn-info">
+            FULL STATE SYNC
+          </button>
         </div>
         
         <div id="esp32TestResult" class="connection-test-result"></div>
@@ -174,12 +183,39 @@
       <h2 class="panel-title">Manajemen 12 Tim</h2>
       
       <div class="teams-section">
+        <div class="team-manage-header">
+            <button id="editScoresToggle" class="admin-btn btn-save">
+            <span class="edit-icon"></span> EDIT SKOR
+          </button>
+          <span class="edit-mode-status" id="editModeStatus">Mode Normal</span>
+        </div>
+        <p>
         <div id="teams" class="teams-two-rows-container">
           <!-- tim card dari js/admin.js akan di inject sini -->
-        </div>
+        </div></p>
       </div>
     </section>
   </main>
+
+  <!-- Edit Score Dialog -->
+  <div id="editScoreDialog" class="edit-score-dialog">
+    <div class="dialog-content">
+      <h3>Edit Skor Tim <span id="editTeamLetter"></span></h3>
+      <div class="dialog-form">
+        <div class="form-group">
+          <label for="editScoreInput">Skor Baru:</label>
+          <input type="number" id="editScoreInput" class="form-control" min="-999" max="999" step="1">
+        </div>
+        <div class="current-score">
+          Skor saat ini: <span id="currentScoreValue">0</span>
+        </div>
+        <div class="dialog-buttons">
+          <button id="cancelEdit" class="btn-cancel">BATAL</button>
+          <button id="saveEdit" class="btn-save">SIMPAN</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="js/admin.js"></script>

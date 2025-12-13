@@ -7,6 +7,10 @@ let lockState = { locked: false, activeTeam: null, lockId: null, lockSequence: 0
 let teamStatus = Array(TEAM_COUNT).fill(true);
 let autoPenaltyEnabled = true;
 
+// ===== EDIT SCORE FEATURE =====
+let editModeActive = false;
+let currentlyEditingTeam = 0;
+
 // ===== STATUS ESP32 DIPERBAIKI =====
 let esp32Status = {
   connected: false,
@@ -41,13 +45,176 @@ const adminLogger = {
   
   warning: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.warn(`[ADMIN:${timestamp}] ⚠️ ${message}`, data || '');
+    console.warn(`[ADMIN:${timestamp}] ${message}`, data || '');
   }
 };
 
 // ===== FUNGSI BANTU =====
 function getTeamLetter(index) {
   return String.fromCharCode(64 + index);
+}
+
+// ===== EDIT SCORE FEATURE FUNCTIONS =====
+function initializeEditScoreFeature() {
+  const editToggleBtn = document.getElementById("editScoresToggle");
+  const editModeStatus = document.getElementById("editModeStatus");
+  
+  if (editToggleBtn) {
+    editToggleBtn.addEventListener("click", toggleEditMode);
+  }
+  
+  // Add event listeners for edit dialog
+  document.getElementById("cancelEdit").addEventListener("click", closeEditScoreDialog);
+  document.getElementById("saveEdit").addEventListener("click", saveEditedScore);
+  
+  // Close dialog on overlay click
+  document.getElementById("editScoreDialog").addEventListener("click", function(e) {
+    if (e.target === this) {
+      closeEditScoreDialog();
+    }
+  });
+  
+  adminLogger.info("Edit score feature initialized");
+}
+
+function toggleEditMode() {
+  editModeActive = !editModeActive;
+  const editToggleBtn = document.getElementById("editScoresToggle");
+  const editModeStatus = document.getElementById("editModeStatus");
+  
+  if (editToggleBtn && editModeStatus) {
+    if (editModeActive) {
+      editToggleBtn.innerHTML = 'SELESAI EDITING';
+      editToggleBtn.classList.add('btn-success');
+      editToggleBtn.classList.remove('btn-info');
+      editModeStatus.textContent = "Mode Edit Skor - Klik angka skor untuk mengedit";
+      editModeStatus.style.color = "#4caf50";
+      editModeStatus.style.fontWeight = "bold";
+      
+      // Add click event to all score displays
+      for (let i = 1; i <= TEAM_COUNT; i++) {
+        const scoreEl = document.getElementById(`score-${i}`);
+        if (scoreEl) {
+          scoreEl.style.cursor = "pointer";
+          scoreEl.style.backgroundColor = "#f0f8ff";
+          scoreEl.style.border = "2px dashed #4caf50";
+          scoreEl.style.padding = "5px";
+          scoreEl.style.borderRadius = "4px";
+          
+          // Remove existing event listeners and add new one
+          scoreEl.onclick = () => openEditScoreDialog(i);
+        }
+      }
+      
+      adminLogger.info("Edit mode activated");
+      showNotification("Mode edit skor diaktifkan. Klik angka skor untuk mengedit.", "info");
+    } else {
+      editToggleBtn.innerHTML = 'EDIT SKOR';
+      editToggleBtn.classList.remove('btn-success');
+      editToggleBtn.classList.add('btn-save');
+      editModeStatus.textContent = "Mode Normal";
+      editModeStatus.style.color = "";
+      editModeStatus.style.fontWeight = "";
+      
+      // Remove click events and styling
+      for (let i = 1; i <= TEAM_COUNT; i++) {
+        const scoreEl = document.getElementById(`score-${i}`);
+        if (scoreEl) {
+          scoreEl.style.cursor = "";
+          scoreEl.style.backgroundColor = "";
+          scoreEl.style.border = "";
+          scoreEl.style.padding = "";
+          scoreEl.style.borderRadius = "";
+          scoreEl.onclick = null;
+        }
+      }
+      
+      adminLogger.info("Edit mode deactivated");
+      showNotification("Mode edit skor dinonaktifkan.", "info");
+    }
+  }
+}
+
+function openEditScoreDialog(team) {
+  if (!editModeActive) return;
+  
+  currentlyEditingTeam = team;
+  const currentScore = document.getElementById(`score-${team}`).textContent;
+  const teamLetter = getTeamLetter(team);
+  
+  document.getElementById("editTeamLetter").textContent = teamLetter;
+  document.getElementById("currentScoreValue").textContent = currentScore;
+  document.getElementById("editScoreInput").value = currentScore;
+  
+  const dialog = document.getElementById("editScoreDialog");
+  dialog.style.display = "flex";
+  
+  // Focus on input after a short delay
+  setTimeout(() => {
+    document.getElementById("editScoreInput").focus();
+    document.getElementById("editScoreInput").select();
+  }, 100);
+}
+
+function closeEditScoreDialog() {
+  document.getElementById("editScoreDialog").style.display = "none";
+  currentlyEditingTeam = 0;
+}
+
+function saveEditedScore() {
+  if (!currentlyEditingTeam) return;
+  
+  const newScore = parseInt(document.getElementById("editScoreInput").value);
+  const teamLetter = getTeamLetter(currentlyEditingTeam);
+  
+  if (isNaN(newScore)) {
+    showNotification("Skor harus berupa angka!", "error");
+    return;
+  }
+  
+  if (newScore < -999 || newScore > 999) {
+    showNotification("Skor harus antara -999 dan 999!", "error");
+    return;
+  }
+  
+  // Show loading state
+  const saveBtn = document.getElementById("saveEdit");
+  const originalText = saveBtn.textContent;
+  saveBtn.textContent = "Menyimpan...";
+  saveBtn.disabled = true;
+  
+  // Send to server
+  fetch(`/editScore?team=${currentlyEditingTeam}&score=${newScore}`)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      if (data.success) {
+        // Update local display
+        const scoreEl = document.getElementById(`score-${currentlyEditingTeam}`);
+        if (scoreEl) {
+          scoreEl.textContent = newScore;
+          scoreEl.classList.add('score-update');
+          setTimeout(() => scoreEl.classList.remove('score-update'), 600);
+        }
+        
+        showNotification(`Skor Tim ${teamLetter} diubah menjadi ${newScore}`, "success");
+        closeEditScoreDialog();
+        
+        adminLogger.info(`Score edited: Team ${teamLetter} = ${newScore}`);
+      } else {
+        throw new Error(data.message || 'Failed to update score');
+      }
+    })
+    .catch(err => {
+      adminLogger.error('Edit score failed:', err);
+      showNotification(`Gagal mengubah skor: ${err.message}`, "error");
+    })
+    .finally(() => {
+      saveBtn.textContent = originalText;
+      saveBtn.disabled = false;
+    });
 }
 
 // ===== UPDATE ESP32 STATUS DENGAN DETECTION DIPERBAIKI =====
@@ -59,17 +226,11 @@ function updateESP32Status(status) {
   const esp32ActiveTeams = document.getElementById("esp32ActiveTeams");
   const esp32ModulesDetected = document.getElementById("esp32ModulesDetected");
   const esp32WiFiRSSI = document.getElementById("esp32WiFiRSSI");
-  const esp32RSSIHistory = document.getElementById("esp32RSSIHistory");
   
   const sebelumnyaOnline = esp32Status.connected;
   
   // Update status dengan data baru
   esp32Status = { ...esp32Status, ...status };
-  
-  // PERBAIKAN: Jika ada RSSI history, update tampilan
-  if (status.rssiHistory && Array.isArray(status.rssiHistory)) {
-    esp32Status.rssiHistory = status.rssiHistory;
-  }
   
   if (esp32Badge) {
     if (esp32Status.connected) {
@@ -140,31 +301,23 @@ function updateESP32Status(status) {
     }
   }
   
-  // Update informasi sinyal WiFi - DIPERBAIKI DENGAN HISTORY
+  // Update informasi sinyal WiFi
   if (esp32WiFiRSSI) {
     if (esp32Status.wifiRSSI !== undefined && esp32Status.wifiRSSI !== null) {
       esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
       
-      // Logika warna berdasarkan kekuatan sinyal yang benar
       if (esp32Status.wifiRSSI > -60) {
-        esp32WiFiRSSI.style.color = "#4caf50"; // HIJAU untuk kuat (> -60 dBm)
+        esp32WiFiRSSI.style.color = "#4caf50";
         esp32WiFiRSSI.title = `Sinyal WiFi: KUAT | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
       } else if (esp32Status.wifiRSSI > -70) {
-        esp32WiFiRSSI.style.color = "#ff9800"; // ORANGE untuk sedang (-60 s/d -70 dBm)
+        esp32WiFiRSSI.style.color = "#ff9800";
         esp32WiFiRSSI.title = `Sinyal WiFi: SEDANG | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
       } else if (esp32Status.wifiRSSI > -80) {
-        esp32WiFiRSSI.style.color = "#f44336"; // MERAH untuk lemah (-70 s/d -80 dBm)
+        esp32WiFiRSSI.style.color = "#f44336";
         esp32WiFiRSSI.title = `Sinyal WiFi: LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
       } else {
-        esp32WiFiRSSI.style.color = "#d32f2f"; // MERAH TUA untuk sangat lemah (< -80 dBm)
+        esp32WiFiRSSI.style.color = "#d32f2f";
         esp32WiFiRSSI.title = `Sinyal WiFi: SANGAT LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
-      }
-      
-      // PERBAIKAN: Tampilkan RSSI history jika ada
-      if (esp32RSSIHistory && esp32Status.rssiHistory && esp32Status.rssiHistory.length > 0) {
-        const avgRSSI = Math.round(esp32Status.rssiHistory.reduce((sum, entry) => sum + entry.rssi, 0) / esp32Status.rssiHistory.length);
-        esp32RSSIHistory.textContent = `Rata-rata: ${avgRSSI} dBm (${esp32Status.rssiHistory.length} sampel)`;
-        esp32RSSIHistory.style.color = esp32WiFiRSSI.style.color;
       }
     } else {
       esp32WiFiRSSI.textContent = "-";
@@ -244,12 +397,6 @@ function updateESP32Timestamp() {
       } else {
         timestampElement.textContent = `${Math.floor(timeDiff / 60)} menit lalu`;
         timestampElement.style.color = "#f44336";
-      }
-      
-      // PERBAIKAN: Refresh jika mendekati timeout
-      if (timeDiff > 240 && timeDiff < 300 && !document.hidden) {
-        refreshESP32Status();
-        socket.emit("getESP32Status");
       }
     }
   }
@@ -332,35 +479,6 @@ function createTeamControls() {
       </div>
     `;
     
-    // PERBAIKAN: Tambah tooltip dengan informasi lock sequence
-    teamDiv.title = `Tim ${getTeamLetter(i)} - Klik untuk melihat detail`;
-    
-    teamDiv.addEventListener('mouseenter', () => {
-      if (teamStatus[i - 1]) {
-        teamDiv.style.transform = 'translateY(-3px)';
-        teamDiv.style.boxShadow = '0 8px 20px rgba(255, 215, 0, 0.2)';
-        
-        // Tampilkan informasi sequence jika ada
-        const sequenceEl = document.getElementById(`sequence-${i}`);
-        if (sequenceEl && sequenceEl.textContent) {
-          teamDiv.title = `Tim ${getTeamLetter(i)} - Sequence: ${sequenceEl.textContent}`;
-        }
-      }
-    });
-    
-    teamDiv.addEventListener('mouseleave', () => {
-      teamDiv.style.transform = 'translateY(0)';
-      teamDiv.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-      teamDiv.title = `Tim ${getTeamLetter(i)} - Klik untuk melihat detail`;
-    });
-    
-    // PERBAIKAN: Tambah klik untuk melihat detail lock
-    teamDiv.addEventListener('click', () => {
-      if (lockState.locked && lockState.activeTeam === i) {
-        showNotification(`Tim ${getTeamLetter(i)} aktif | Lock ID: ${lockState.lockId || 'N/A'} | Sequence: ${lockState.lockSequence || '0'}`, "info");
-      }
-    });
-    
     const toggleBtn = teamDiv.querySelector(`#toggle-${i}`);
     if (toggleBtn) {
       toggleBtn.addEventListener('click', (e) => {
@@ -405,34 +523,12 @@ function initializeESP32Controls() {
     syncBtn.addEventListener("click", manualSyncWithESP32);
   }
   
-  // PERBAIKAN: Tambah tombol untuk force unlock via WebSocket
-  if (!forceUnlockWSBtn) {
-    const esp32Actions = document.querySelector(".controller-actions");
-    if (esp32Actions) {
-      const newBtn = document.createElement("button");
-      newBtn.id = "forceUnlockWS";
-      newBtn.className = "admin-btn btn-danger";
-      newBtn.textContent = "FORCE UNLOCK (WS)";
-      newBtn.title = "Force unlock via WebSocket langsung ke ESP32";
-      esp32Actions.appendChild(newBtn);
-      
-      newBtn.addEventListener("click", forceUnlockViaWebSocket);
-    }
+  if (forceUnlockWSBtn) {
+    forceUnlockWSBtn.addEventListener("click", forceUnlockViaWebSocket);
   }
   
-  // PERBAIKAN: Tambah tombol untuk full state recovery
-  if (!fullStateBtn) {
-    const esp32Actions = document.querySelector(".controller-actions");
-    if (esp32Actions) {
-      const newBtn = document.createElement("button");
-      newBtn.id = "fullStateRecovery";
-      newBtn.className = "admin-btn btn-info";
-      newBtn.textContent = "FULL STATE SYNC";
-      newBtn.title = "Sinkronisasi state lengkap dengan ESP32";
-      esp32Actions.appendChild(newBtn);
-      
-      newBtn.addEventListener("click", requestFullStateSync);
-    }
+  if (fullStateBtn) {
+    fullStateBtn.addEventListener("click", requestFullStateSync);
   }
   
   startESP32RealTimePolling();
@@ -457,14 +553,12 @@ function startESP32RealTimePolling() {
   setInterval(() => {
     socket.emit("getESP32Status");
     
-    // PERBAIKAN: Ambil status dari endpoint yang diperbarui
     fetch('/esp32status')
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
       .then(data => {
-        // Update status dengan data yang diterima
         updateESP32Status({
           lastActivity: new Date()
         });
@@ -477,7 +571,7 @@ function startESP32RealTimePolling() {
   // Update timestamp setiap detik
   setInterval(updateESP32Timestamp, 1000);
   
-  // PERBAIKAN: Polling untuk full state setiap 30 detik
+  // Polling untuk full state setiap 30 detik
   setInterval(() => {
     if (esp32Status.connected && esp32Status.socketId) {
       fetchFullState();
@@ -521,7 +615,7 @@ function forceUnlockViaWebSocket() {
       
       adminLogger.info("Force unlock via WebSocket berhasil", response);
     } else {
-      showNotification("❌ Gagal mengirim force unlock via WebSocket!", "error");
+      showNotification("Gagal mengirim force unlock via WebSocket!", "error");
       adminLogger.error("Force unlock via WebSocket gagal", response);
     }
     
@@ -538,7 +632,7 @@ function forceUnlockViaWebSocket() {
       btn.disabled = false;
       btn.textContent = originalText;
       btn.classList.remove('loading');
-      showNotification("⚠️ Timeout: ESP32 mungkin tidak merespons", "warning");
+      showNotification("Timeout: ESP32 mungkin tidak merespons", "warning");
     }
   }, 5000);
 }
@@ -582,7 +676,7 @@ function requestFullStateSync() {
     })
     .catch(err => {
       adminLogger.error('Full state sync failed:', err);
-      showNotification("❌ State sync gagal!", "error");
+      showNotification("State sync gagal!", "error");
     })
     .finally(() => {
       setTimeout(() => {
@@ -676,7 +770,7 @@ function forceUnlockAll() {
     })
     .catch(err => {
       adminLogger.error('Force unlock failed:', err);
-      showNotification("❌ Gagal membuka kunci paksa!", "error");
+      showNotification("Gagal membuka kunci paksa!", "error");
     })
     .finally(() => {
       setTimeout(() => {
@@ -724,7 +818,7 @@ function manualSyncWithESP32() {
       }
     })
     .catch(err => {
-      showNotification("❌ Sync gagal", "error");
+      showNotification("Sync gagal", "error");
       console.error('Sync error:', err);
     })
     .finally(() => {
@@ -953,7 +1047,6 @@ function updateConfigDisplay() {
   document.getElementById("plusValue").textContent = config.plus;
   document.getElementById("minusValue").textContent = config.minus;
   
-  // PERBAIKAN: Update juga di input fields
   const plusInput = document.getElementById("plus");
   const minusInput = document.getElementById("minus");
   const timerInput = document.getElementById("timerDuration");
@@ -1019,44 +1112,108 @@ function initializeJuryControls() {
   if (juryMinus) {
     juryMinus.addEventListener("click", handleJuryMinus);
   }
+  
+  // Initialize in waiting state
+  updateJuryControls(null);
 }
 
-function handleJuryPlus() {
+// ===== FUNGSI UPDATE KONTROL JURI =====
+function updateJuryControls(activeTeam) {
+  const juryControls = document.getElementById("juryControls");
+  const waitingLabel = document.getElementById("waitingLabel");
+  const activeTeamLabel = document.getElementById("activeTeamLabel");
+  const juryPlus = document.getElementById("juryPlus");
+  const juryMinus = document.getElementById("juryMinus");
+  
+  if (activeTeam && activeTeam > 0) {
+    if (juryControls) {
+      juryControls.style.display = "flex";
+      juryControls.style.opacity = "1";
+      juryControls.style.visibility = "visible";
+    }
+    if (waitingLabel) {
+      waitingLabel.style.display = "none";
+    }
+    if (activeTeamLabel) {
+      activeTeamLabel.textContent = `Tim ${getTeamLetter(activeTeam)} Sedang Aktif`;
+      activeTeamLabel.style.display = "block";
+      activeTeamLabel.style.animation = "pulse 2s infinite";
+    }
+    
+    if (juryPlus) juryPlus.disabled = false;
+    if (juryMinus) juryMinus.disabled = false;
+    
+    adminLogger.info(`Jury controls activated for Team ${getTeamLetter(activeTeam)}`);
+  } else {
+    if (juryControls) {
+      juryControls.style.display = "none";
+    }
+    if (waitingLabel) {
+      waitingLabel.style.display = "block";
+      waitingLabel.style.animation = "pulse 2s infinite";
+    }
+    if (activeTeamLabel) {
+      activeTeamLabel.style.display = "none";
+    }
+    
+    if (juryPlus) juryPlus.disabled = true;
+    if (juryMinus) juryMinus.disabled = true;
+    
+    adminLogger.info("Jury controls deactivated - no active team");
+  }
+}
+
+function handleJuryAction(isCorrect) {
   if (!lockState.activeTeam) {
     showNotification("Tidak ada tim aktif!", "warning");
     return;
   }
   
-  fetch(`/update?team=${lockState.activeTeam}&add=${config.plus}`)
+  const points = isCorrect ? config.plus : config.minus;
+  const team = lockState.activeTeam;
+  const teamLetter = getTeamLetter(team);
+  
+  // Show loading state
+  const juryBtn = isCorrect ? document.getElementById("juryPlus") : document.getElementById("juryMinus");
+  const originalText = juryBtn.innerHTML;
+  juryBtn.innerHTML = '<span class="loading-spinner"></span> MEMPROSES...';
+  juryBtn.disabled = true;
+  
+  // Disable the other button too
+  const otherBtn = isCorrect ? document.getElementById("juryMinus") : document.getElementById("juryPlus");
+  if (otherBtn) {
+    otherBtn.disabled = true;
+  }
+  
+  fetch(`/update?team=${team}&add=${points}`)
     .then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.text();
     })
     .then(data => {
-      showNotification(`+${config.plus} poin!`, "success");
+      showNotification(isCorrect ? `Tim ${teamLetter} benar! +${points} poin!` : `Tim ${teamLetter} salah! ${points} poin!`, isCorrect ? "success" : "warning");
+      
+      // Reset jury controls after a short delay
+      setTimeout(() => {
+        updateJuryControls(null);
+      }, 1000);
+      
+      adminLogger.info(`Jury action: Team ${teamLetter} ${isCorrect ? 'correct' : 'wrong'} (${points} points)`);
     })
     .catch(err => {
       showNotification(`Gagal memberikan poin!`, "error");
+      juryBtn.innerHTML = originalText;
+      juryBtn.disabled = false;
+      if (otherBtn) otherBtn.disabled = false;
     });
 }
 
+function handleJuryPlus() {
+  handleJuryAction(true);
+}
+
 function handleJuryMinus() {
-  if (!lockState.activeTeam) {
-    showNotification("Tidak ada tim aktif!", "warning");
-    return;
-  }
-  
-  fetch(`/update?team=${lockState.activeTeam}&add=${config.minus}`)
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.text();
-    })
-    .then(data => {
-      showNotification(`${config.minus} poin!`, "warning");
-    })
-    .catch(err => {
-      showNotification(`Gagal mengurangi poin!`, "error");
-    });
+  handleJuryAction(false);
 }
 
 // ===== HIGH-SPEED NOTIFICATION DIPERBAIKI =====
@@ -1070,14 +1227,13 @@ function showNotification(message, type = "success") {
     const notification = document.createElement('div');
     notification.className = `admin-notification ${type}`;
     
-    // PERBAIKAN: Tambah icon berdasarkan type
     let icon = '';
     switch(type) {
-      case 'success': icon = '✅'; break;
-      case 'error': icon = '❌'; break;
-      case 'warning': icon = '⚠️'; break;
-      case 'info': icon = 'ℹ️'; break;
-      default: icon = '💡';
+      case 'success': break;
+      case 'error': break;
+      case 'warning': break;
+      case 'info': break;
+      default: icon = '';
     }
     
     notification.innerHTML = `<span class="notification-icon">${icon}</span> ${message}`;
@@ -1130,7 +1286,6 @@ socket.on("esp32Status", (status) => {
   updateESP32Status(status);
 });
 
-// PERBAIKAN: Event baru untuk warning dari ESP32
 socket.on("esp32Warning", (data) => {
   console.warn("ESP32 Warning:", data);
   
@@ -1150,7 +1305,6 @@ socket.on("esp32Warning", (data) => {
   
   showNotification(message, type);
   
-  // Update badge jika ada warning
   const esp32Badge = document.getElementById("esp32Badge");
   if (esp32Badge && data.type === 'weak_signal') {
     esp32Badge.classList.add('warning');
@@ -1171,7 +1325,6 @@ socket.on("esp32Activity", (activity) => {
   updateESP32Status(updatedStatus);
 });
 
-// PERBAIKAN: Event baru untuk full state sync
 socket.on("fullStateSync", (data) => {
   console.log("Full state sync received from server:", data);
   updateAllStateFromServer(data);
@@ -1207,11 +1360,6 @@ socket.on("lockstate", (state) => {
   const unlockBtn = document.getElementById("unlock");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
   const forceUnlockWSBtn = document.getElementById("forceUnlockWS");
-  const juryControls = document.getElementById("juryControls");
-  const waitingLabel = document.getElementById("waitingLabel");
-  const activeTeamLabel = document.getElementById("activeTeamLabel");
-  const juryPlus = document.getElementById("juryPlus");
-  const juryMinus = document.getElementById("juryMinus");
 
   if (unlockBtn) {
     unlockBtn.textContent = state.locked ? 
@@ -1228,24 +1376,8 @@ socket.on("lockstate", (state) => {
     forceUnlockWSBtn.disabled = !state.locked;
   }
 
-  if (state.locked && state.activeTeam) {
-    if (juryControls) juryControls.style.display = "flex";
-    if (waitingLabel) waitingLabel.style.display = "none";
-    if (activeTeamLabel) {
-      activeTeamLabel.textContent = `Tim ${getTeamLetter(state.activeTeam)} Sedang Aktif | Seq: ${state.lockSequence || '0'}`;
-      activeTeamLabel.style.display = "block";
-    }
-    
-    if (juryPlus) juryPlus.disabled = false;
-    if (juryMinus) juryMinus.disabled = false;
-  } else {
-    if (juryControls) juryControls.style.display = "none";
-    if (waitingLabel) waitingLabel.style.display = "block";
-    if (activeTeamLabel) activeTeamLabel.style.display = "none";
-    
-    if (juryPlus) juryPlus.disabled = true;
-    if (juryMinus) juryMinus.disabled = true;
-  }
+  // Update jury controls based on lock state
+  updateJuryControls(state.activeTeam);
 
   // PERBAIKAN: Update sequence numbers di tampilan tim
   for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -1386,7 +1518,6 @@ function updateTimerStatus(state, seconds) {
   if (timerState) {
     timerState.textContent = state;
     
-    // PERBAIKAN: Tambah tooltip dengan lock ID
     if (lockState.locked && lockState.lockId) {
       timerState.title = `Lock ID: ${lockState.lockId}`;
     } else {
@@ -1412,7 +1543,6 @@ function updateTimerStatus(state, seconds) {
 socket.on("timerStart", (data) => {
   updateTimerStatus('BERJALAN', data.duration);
   
-  // PERBAIKAN: Tampilkan informasi lock
   if (data.lockId) {
     console.log(`[TIMER] Started with lock ID: ${data.lockId}`);
   }
@@ -1425,7 +1555,6 @@ socket.on("timerUpdate", (data) => {
 socket.on("timerReset", (data) => {
   updateTimerStatus('TIDAK AKTIF', 0);
   
-  // PERBAIKAN: Log reset dengan lock ID
   if (data && data.lockId) {
     console.log(`[TIMER] Reset for lock ID: ${data.lockId}`);
   }
@@ -1438,9 +1567,6 @@ socket.on("systemUnlocked", (data) => {
   const unlockBtn = document.getElementById("unlock");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
   const forceUnlockWSBtn = document.getElementById("forceUnlockWS");
-  const juryControls = document.getElementById("juryControls");
-  const waitingLabel = document.getElementById("waitingLabel");
-  const activeTeamLabel = document.getElementById("activeTeamLabel");
   
   if (unlockBtn) {
     unlockBtn.textContent = "Buka Kunci Tombol";
@@ -1455,9 +1581,8 @@ socket.on("systemUnlocked", (data) => {
     forceUnlockWSBtn.disabled = true;
   }
   
-  if (juryControls) juryControls.style.display = "none";
-  if (waitingLabel) waitingLabel.style.display = "block";
-  if (activeTeamLabel) activeTeamLabel.style.display = "none";
+  // Reset jury controls
+  updateJuryControls(null);
   
   for (let i = 1; i <= TEAM_COUNT; i++) {
     const badgeEl = document.getElementById(`badge-${i}`);
@@ -1471,7 +1596,6 @@ socket.on("systemUnlocked", (data) => {
     }
   }
   
-  // PERBAIKAN: Log unlock reason
   if (data && data.reason) {
     console.log(`[SYSTEM] Unlocked with reason: ${data.reason}`, data);
   }
@@ -1514,6 +1638,7 @@ function initializeAdmin() {
   initializeJuryControls();
   initializeESP32Controls();
   initializeAutoPenaltyToggle();
+  initializeEditScoreFeature();
   updateTimerStatus('TIDAK AKTIF', 0);
   
   refreshESP32Status();
@@ -1579,7 +1704,6 @@ function initializeAdmin() {
       rssiHistory: esp32Data.rssiHistory || []
     });
     
-    // PERBAIKAN: Update timer dari data terpisah
     if (timerData) {
       updateTimerStatus(
         timerData.timerRunning ? 'BERJALAN' : 'TIDAK AKTIF',
@@ -1587,10 +1711,7 @@ function initializeAdmin() {
       );
     }
     
-    // PERBAIKAN: Update config display
     updateConfigDisplay();
-    
-    // PERBAIKAN: Update lock state UI
     updateLockStateUI();
     
     adminLogger.info('Admin panel initialized successfully', {
@@ -1609,11 +1730,5 @@ function initializeAdmin() {
 document.addEventListener('DOMContentLoaded', function() {
   adminLogger.info('Admin panel initializing...');
   initializeAdmin();
-  
-  // PERBAIKAN: Tambah event untuk menampilkan informasi versi
-  const versionInfo = document.createElement('div');
-  versionInfo.className = 'version-info';
-  versionInfo.textContent = 'v2.1.0';
-  versionInfo.title = 'Sistem dengan atomic lock, state recovery, dan WebSocket integration';
   document.querySelector('.admin-header').appendChild(versionInfo);
 });

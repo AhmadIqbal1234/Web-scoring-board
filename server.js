@@ -1977,6 +1977,64 @@ app.get("/reset", (req, res) => {
   res.json({ sukses: true, pesan: "Skor direset dan timer direset", skor: scores });
 });
 
+// ===== ENDPOINT: EDIT SCORE =====
+app.get("/editScore", (req, res) => {
+  const startTime = Date.now();
+  const team = parseInt(req.query.team);
+  const score = parseInt(req.query.score);
+  
+  // Validasi
+  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+    logger.error(`EDIT SCORE: Invalid team ${team}`);
+    return res.status(400).json({ 
+      success: false,
+      error: "Tim tidak valid",
+      message: `Tim harus antara 1 dan ${TEAM_COUNT}`
+    });
+  }
+  
+  if (!Number.isInteger(score) || score < -999 || score > 999) {
+    logger.error(`EDIT SCORE: Invalid score ${score} for team ${team}`);
+    return res.status(400).json({ 
+      success: false,
+      error: "Skor tidak valid",
+      message: "Skor harus antara -999 dan 999"
+    });
+  }
+  
+  // Update skor
+  const previousScore = scores[team - 1];
+  scores[team - 1] = score;
+  
+  const teamLetter = getTeamLetter(team);
+  
+  // Kirim event update ke semua client
+  io.emit("update", { team, score });
+  
+  // Kirim ke ESP32 jika terhubung
+  sendScoreUpdateToESP32(team, score);
+  
+  const responseTime = Date.now() - startTime;
+  
+  logger.info(`EDIT SCORE: Team ${teamLetter} score changed from ${previousScore} to ${score}`, {
+    team: team,
+    previousScore: previousScore,
+    newScore: score,
+    responseTime: `${responseTime}ms`,
+    timestamp: new Date().toLocaleTimeString('id-ID')
+  });
+  
+  res.json({ 
+    success: true, 
+    team: team,
+    teamLetter: teamLetter,
+    previousScore: previousScore,
+    newScore: score,
+    responseTime: `${responseTime}ms`,
+    message: `Skor Tim ${teamLetter} berhasil diubah`
+  });
+});
+
 app.get("/scores", (req, res) => {
   res.json(scores);
 });
