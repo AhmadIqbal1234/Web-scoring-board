@@ -22,9 +22,8 @@ const TEAM_COUNT = 12;
 const isProduction = process.env.NODE_ENV === 'production';
 
 // ===== WEBSOCKET SERVER UNTUK ESP32 =====
-// PERBAIKAN: Hapus port terpisah, gunakan port yang sama
 const wss = new WebSocketServer({ 
-  noServer: true  // Tidak membuat server sendiri
+  noServer: true
 });
 
 // PERBAIKAN: Setup upgrade handler di awal
@@ -373,7 +372,7 @@ wss.on('connection', function connection(ws, req) {
   esp32Status.ip = clientIP;
   esp32Status.connectionType = "websocket";
   
-  // Kirim status ke semua client Socket.IO
+  // PERBAIKAN: Kirim status ke semua client Socket.IO termasuk admin
   io.emit("esp32Status", esp32Status);
   
   // Send welcome message
@@ -425,6 +424,8 @@ wss.on('connection', function connection(ws, req) {
     
     esp32Status.connected = false;
     esp32Status.connectionType = "websocket_disconnected";
+    
+    // PERBAIKAN: Kirim update ke semua client
     io.emit("esp32Status", esp32Status);
     
     logger.esp32(`ESP32 WebSocket disconnected: ${socketId}`);
@@ -538,7 +539,7 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
       esp32WebSocket.send(acquiredMsg);
     }
     
-    // Kirim event buzz ke client Socket.IO
+    // PERBAIKAN PENTING: Kirim event buzz ke SEMUA client Socket.IO (termasuk admin)
     io.emit("buzz", { 
       team, 
       lockId: lockState.lockId,
@@ -546,7 +547,7 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
       timestamp: lockTimestamp 
     });
     
-    // Update lock state display
+    // Update lock state display ke SEMUA client
     io.emit("lockstate", lockState);
     
     // Mainkan buzzer dan audio tim
@@ -593,6 +594,9 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
   esp32Status.lastHeartbeat = new Date();
   esp32Status.heartbeatCount++;
   
+  // PERBAIKAN: Update semua client
+  io.emit("esp32Status", esp32Status);
+  
   // Jika lock status tidak sync, kirim update
   if (lockState.locked !== (lockStatus === 1) || 
       lockState.activeTeam !== lockedTeam) {
@@ -608,9 +612,6 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
     lockStatus: lockStatus,
     lockedTeam: lockedTeam
   });
-  
-  // Update semua client
-  io.emit("esp32Status", esp32Status);
 }
 
 // ===== HANDLE ESP32 MODULE STATUS =====
@@ -656,14 +657,14 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   // Update score
   scores[team - 1] += points;
   
-  // Kirim update ke client
+  // PERBAIKAN: Kirim update ke SEMUA client
   io.emit("update", { team, score: scores[team - 1] });
   io.emit("scoring", { team, isCorrect });
   
-  // Mainkan audio juri
+  // Mainkan audio juri ke SEMUA client
   timerAudio.playJuryAudio(isCorrect);
   
-  // Berikan feedback
+  // Berikan feedback ke SEMUA client
   const feedbackMessage = generateFeedbackMessage(team, isCorrect, points);
   io.emit("aiMessage", {
     message: feedbackMessage,
@@ -679,6 +680,7 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   sendLockStateToESP32();
   sendScoreUpdateToESP32(team, scores[team - 1]);
   
+  // PERBAIKAN: Kirim lockstate update ke SEMUA client
   io.emit("lockstate", lockState);
 }
 
@@ -815,6 +817,8 @@ function monitorESP32WebSocket() {
       
       esp32Status.connected = false;
       esp32Status.connectionType = "websocket_timeout";
+      
+      // PERBAIKAN: Update semua client
       io.emit("esp32Status", esp32Status);
     }
   }
@@ -847,10 +851,9 @@ function handleAutoPenalty() {
   
   scores[activeTeam - 1] += penaltyPoints;
   
-  setImmediate(() => {
-    io.emit("update", { team: activeTeam, score: scores[activeTeam - 1] });
-    io.emit("scoring", { team: activeTeam, isCorrect: false });
-  });
+  // PERBAIKAN: Kirim update ke SEMUA client
+  io.emit("update", { team: activeTeam, score: scores[activeTeam - 1] });
+  io.emit("scoring", { team: activeTeam, isCorrect: false });
   
   const previousActiveTeam = lockState.activeTeam;
   releaseAtomicLock();
@@ -863,22 +866,21 @@ function handleAutoPenalty() {
     timerInterval = null;
   }
   
-  setImmediate(() => {
-    io.emit("lockstate", lockState);
-    io.emit("timerReset");
-    io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
-    
-    // Kirim ke ESP32
-    sendLockStateToESP32();
-    sendScoreUpdateToESP32(activeTeam, scores[activeTeam - 1]);
-    
-    const feedbackMessage = `Waktu habis! Tim ${getTeamLetter(activeTeam)} tidak menjawab, dikurangi ${Math.abs(penaltyPoints)} poin!`;
-    
-    io.emit("aiMessage", {
-      message: feedbackMessage,
-      type: "warning",
-      shouldSpeak: false
-    });
+  // PERBAIKAN: Kirim event ke SEMUA client
+  io.emit("lockstate", lockState);
+  io.emit("timerReset", { reason: "auto_penalty_applied" });
+  io.emit("systemUnlocked", { reason: "auto_penalty_applied" });
+  
+  // Kirim ke ESP32
+  sendLockStateToESP32();
+  sendScoreUpdateToESP32(activeTeam, scores[activeTeam - 1]);
+  
+  const feedbackMessage = `Waktu habis! Tim ${getTeamLetter(activeTeam)} tidak menjawab, dikurangi ${Math.abs(penaltyPoints)} poin!`;
+  
+  io.emit("aiMessage", {
+    message: feedbackMessage,
+    type: "warning",
+    shouldSpeak: false
   });
   
   logger.info(`AUTO PENALTI: Tim ${getTeamLetter(activeTeam)} -${Math.abs(penaltyPoints)} poin`, {
@@ -907,13 +909,12 @@ function unlockSystemOnTimerEnd() {
     // Kirim ke ESP32
     sendLockStateToESP32();
     
-    setImmediate(() => {
-      io.emit("lockstate", lockState);
-      io.emit("timerReset");
-      io.emit("systemUnlocked", { 
-        reason: "timer_expired",
-        previousActiveTeam: previousActiveTeam 
-      });
+    // PERBAIKAN: Kirim ke SEMUA client
+    io.emit("lockstate", lockState);
+    io.emit("timerReset", { reason: "timer_expired" });
+    io.emit("systemUnlocked", { 
+      reason: "timer_expired",
+      previousActiveTeam: previousActiveTeam 
     });
     
     logger.info(`Sistem dibuka karena timer habis. Tim sebelumnya: ${previousActiveTeam}`);
@@ -1001,6 +1002,7 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
     esp32Status.lastHeartbeat = new Date();
   }
   
+  // PERBAIKAN: Update semua client
   io.emit("esp32Status", esp32Status);
   
   logger.esp32(`ESP32 update: ${activityType}`, {
@@ -1028,6 +1030,8 @@ function checkESP32Status() {
       
       esp32Status.connected = false;
       esp32Status.connectionType = "timeout";
+      
+      // PERBAIKAN: Update semua client
       io.emit("esp32Status", esp32Status);
     }
   }
@@ -1047,6 +1051,7 @@ function startTimer(activeTeam = null) {
   timeRemaining = config.timerDuration;
   const currentActiveTeam = activeTeam || lockState.activeTeam;
 
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("timerStart", { 
     duration: config.timerDuration,
     lockId: lockState.lockId,
@@ -1063,6 +1068,7 @@ function startTimer(activeTeam = null) {
   timerInterval = setInterval(() => {
     timeRemaining--;
     
+    // PERBAIKAN: Kirim ke SEMUA client
     io.emit("timerUpdate", { 
       timeRemaining,
       lockId: lockState.lockId,
@@ -1112,6 +1118,7 @@ function stopTimer(activeTeam = null) {
     releaseAtomicLock();
   }
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1148,6 +1155,7 @@ function resetTimer() {
     releaseAtomicLock();
   }
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1183,14 +1191,13 @@ function forceUnlockSystem() {
   // Kirim ke ESP32 via WebSocket
   sendForceUnlockToESP32();
   
-  setImmediate(() => {
-    io.emit("lockstate", lockState);
-    io.emit("timerReset", {
-      lockId: lockState.lockId,
-      lockSequence: lockState.lockSequence
-    });
-    io.emit("systemUnlocked", { reason: "buka_kunci_manual" });
+  // PERBAIKAN: Kirim ke SEMUA client
+  io.emit("lockstate", lockState);
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
   });
+  io.emit("systemUnlocked", { reason: "buka_kunci_manual" });
   
   logger.performance("Sistem dibuka paksa");
 }
@@ -1219,14 +1226,11 @@ function resetTimerOnly() {
   isTimerRunning = false;
   timeRemaining = 0;
   
-  // PERBAIKAN: Jangan kirim timerReset jika sistem masih terkunci
-  // Hanya kirim event timerReset jika tidak ada kunci
-  if (!lockState.locked) {
-    io.emit("timerReset", {
-      lockId: lockState.lockId,
-      lockSequence: lockState.lockSequence
-    });
-  }
+  // PERBAIKAN: Kirim timerReset ke semua client meskipun sistem terkunci
+  io.emit("timerReset", {
+    lockId: lockState.lockId,
+    lockSequence: lockState.lockSequence
+  });
   
   lastTimerEvent = 'timerReset';
   
@@ -1378,47 +1382,45 @@ app.get("/update", (req, res) => {
     
     logger.lock(`Request DITERIMA: Tim ${getTeamLetter(team)} berhasil terkunci`);
     
-    setImmediate(() => {
-      io.emit("lockstate", lockState);
-      io.emit("buzz", { 
-        team,
-        lockId: lockState.lockId,
-        lockSequence: lockState.lockSequence
-      });
-      
-      // Kirim ke ESP32
-      sendLockStateToESP32();
-      
-      playBuzzerThenTeamAudio(team);
+    // PERBAIKAN: Kirim ke SEMUA client
+    io.emit("lockstate", lockState);
+    io.emit("buzz", { 
+      team,
+      lockId: lockState.lockId,
+      lockSequence: lockState.lockSequence
     });
+    
+    // Kirim ke ESP32
+    sendLockStateToESP32();
+    
+    playBuzzerThenTeamAudio(team);
   }
 
   if (add !== 0) {
     logger.info(`Scoring: Team ${team} add ${add} points`);
     scores[team - 1] += add;
     
-    setImmediate(() => {
-      io.emit("update", { team, score: scores[team - 1] });
-      io.emit("scoring", { team, isCorrect: add > 0 });
-      
-      timerAudio.playJuryAudio(add > 0);
-      
-      const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
-      io.emit("aiMessage", {
-        message: feedbackMessage,
-        type: add > 0 ? "success" : "penalty",
-        shouldSpeak: false
-      });
-      
-      releaseAtomicLock();
-      resetTimer();
-      
-      // Kirim ke ESP32
-      sendLockStateToESP32();
-      sendScoreUpdateToESP32(team, scores[team - 1]);
-      
-      io.emit("lockstate", lockState);
+    // PERBAIKAN: Kirim ke SEMUA client
+    io.emit("update", { team, score: scores[team - 1] });
+    io.emit("scoring", { team, isCorrect: add > 0 });
+    
+    timerAudio.playJuryAudio(add > 0);
+    
+    const feedbackMessage = generateFeedbackMessage(team, add > 0, add);
+    io.emit("aiMessage", {
+      message: feedbackMessage,
+      type: add > 0 ? "success" : "penalty",
+      shouldSpeak: false
     });
+    
+    releaseAtomicLock();
+    resetTimer();
+    
+    // Kirim ke ESP32
+    sendLockStateToESP32();
+    sendScoreUpdateToESP32(team, scores[team - 1]);
+    
+    io.emit("lockstate", lockState);
   }
 
   const responseTime = Date.now() - startTime;
@@ -1477,6 +1479,7 @@ app.get("/debug/timer/fix", (req, res) => {
   timeRemaining = 0;
   releaseAtomicLock();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("timerReset", {
     lockId: lockState.lockId,
     lockSequence: lockState.lockSequence
@@ -1524,6 +1527,7 @@ app.get("/forceUnlockAll", (req, res) => {
   // Kirim ke ESP32
   sendForceUnlockToESP32();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", {
     lockId: lockState.lockId,
@@ -1655,6 +1659,44 @@ app.get("/", (req, res) => {
   });
 });
 
+// ===== ENDPOINT BARU: EDIT SCORE MANUAL =====
+app.get("/editScore", (req, res) => {
+  const team = parseInt(req.query.team);
+  const score = parseInt(req.query.score);
+  
+  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Tim tidak valid" 
+    });
+  }
+  
+  if (isNaN(score) || score < -999 || score > 999) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Skor harus antara -999 dan 999" 
+    });
+  }
+  
+  // Update score
+  scores[team - 1] = score;
+  
+  // PERBAIKAN: Broadcast ke SEMUA client
+  io.emit("update", { team, score: score });
+  
+  // Kirim ke ESP32 jika terhubung
+  sendScoreUpdateToESP32(team, score);
+  
+  logger.info(`Score manually edited: Team ${getTeamLetter(team)} = ${score}`);
+  
+  res.json({ 
+    success: true, 
+    message: `Skor Tim ${getTeamLetter(team)} diubah menjadi ${score}`,
+    team: team,
+    score: score
+  });
+});
+
 // ===== ROUTE UNTUK TOGGLE TIM =====
 app.get("/toggleTeam", (req, res) => {
   const team = parseInt(req.query.team);
@@ -1673,6 +1715,7 @@ app.get("/toggleTeam", (req, res) => {
     currentState: teamToggleState
   });
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("teamToggleUpdate", {
     team: team,
     enabled: enabled
@@ -1691,6 +1734,7 @@ app.get("/enableAllTeams", (req, res) => {
   
   logger.info("All teams enabled");
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("allTeamsEnabled");
   
   res.json({ 
@@ -1705,6 +1749,7 @@ app.get("/disableAllTeams", (req, res) => {
   
   logger.info("All teams disabled");
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("allTeamsDisabled");
   
   res.json({ 
@@ -1760,7 +1805,6 @@ app.get("/esp32checkin", (req, res) => {
       heartbeatCount: esp32Status.heartbeatCount
     });
     
-    io.emit("esp32Status", esp32Status);
     io.emit("esp32Activity", {
       timestamp: new Date(),
       activity: { type: action, team: team },
@@ -1788,7 +1832,6 @@ app.get("/esp32activity", (req, res) => {
   
   updateESP32FromHTTP(ip, `http_${activityType}_team${team}`);
   
-  io.emit("esp32Status", esp32Status);
   io.emit("esp32Activity", {
     timestamp: new Date(),
     activity: { type: activityType, team: team },
@@ -1833,6 +1876,7 @@ app.get("/toggleAutoPenalty", (req, res) => {
   // Kirim konfigurasi ke ESP32
   sendConfigToESP32();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("autoPenaltyToggle", { enabled: isAutoPenaltyEnabled });
   
   res.json({ 
@@ -1880,6 +1924,7 @@ app.get("/preTeamAudioFinished", (req, res) => {
     }
     startTimer(team);
     
+    // PERBAIKAN: Kirim ke SEMUA client
     io.emit("playTeamAudio", {
       team: team,
       audioFile: teamAudioFile,
@@ -1913,6 +1958,7 @@ app.get("/unlock", (req, res) => {
   // Kirim ke ESP32
   sendLockStateToESP32();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   
   res.json({ sukses: true, pesan: "Sistem dibuka dan timer direset", statusKunci: lockState });
@@ -1951,6 +1997,7 @@ app.get("/setconfig", (req, res) => {
   // Kirim ke ESP32 via WebSocket
   sendConfigToESP32();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("config", config);
   io.emit("autoPenaltyConfig", { 
     diaktifkan: isAutoPenaltyEnabled,
@@ -1972,67 +2019,11 @@ app.get("/reset", (req, res) => {
     }
   }
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("reset", scores);
   io.emit("lockstate", lockState);
+  
   res.json({ sukses: true, pesan: "Skor direset dan timer direset", skor: scores });
-});
-
-// ===== ENDPOINT: EDIT SCORE =====
-app.get("/editScore", (req, res) => {
-  const startTime = Date.now();
-  const team = parseInt(req.query.team);
-  const score = parseInt(req.query.score);
-  
-  // Validasi
-  if (!Number.isInteger(team) || team < 1 || team > TEAM_COUNT) {
-    logger.error(`EDIT SCORE: Invalid team ${team}`);
-    return res.status(400).json({ 
-      success: false,
-      error: "Tim tidak valid",
-      message: `Tim harus antara 1 dan ${TEAM_COUNT}`
-    });
-  }
-  
-  if (!Number.isInteger(score) || score < -999 || score > 999) {
-    logger.error(`EDIT SCORE: Invalid score ${score} for team ${team}`);
-    return res.status(400).json({ 
-      success: false,
-      error: "Skor tidak valid",
-      message: "Skor harus antara -999 dan 999"
-    });
-  }
-  
-  // Update skor
-  const previousScore = scores[team - 1];
-  scores[team - 1] = score;
-  
-  const teamLetter = getTeamLetter(team);
-  
-  // Kirim event update ke semua client
-  io.emit("update", { team, score });
-  
-  // Kirim ke ESP32 jika terhubung
-  sendScoreUpdateToESP32(team, score);
-  
-  const responseTime = Date.now() - startTime;
-  
-  logger.info(`EDIT SCORE: Team ${teamLetter} score changed from ${previousScore} to ${score}`, {
-    team: team,
-    previousScore: previousScore,
-    newScore: score,
-    responseTime: `${responseTime}ms`,
-    timestamp: new Date().toLocaleTimeString('id-ID')
-  });
-  
-  res.json({ 
-    success: true, 
-    team: team,
-    teamLetter: teamLetter,
-    previousScore: previousScore,
-    newScore: score,
-    responseTime: `${responseTime}ms`,
-    message: `Skor Tim ${teamLetter} berhasil diubah`
-  });
 });
 
 app.get("/scores", (req, res) => {
@@ -2099,6 +2090,7 @@ app.get("/debug/resetlock", (req, res) => {
   // Kirim ke ESP32
   sendLockStateToESP32();
   
+  // PERBAIKAN: Kirim ke SEMUA client
   io.emit("lockstate", lockState);
   io.emit("timerReset", {
     lockId: lockState.lockId,
@@ -2199,6 +2191,7 @@ io.on("connection", (socket) => {
     esp32Status.ip = clientIP;
     esp32Status.connectionType = "koneksi_socket";
     
+    // PERBAIKAN: Kirim ke SEMUA client
     io.emit("esp32Status", esp32Status);
     
     socket.on("pingFromAdmin", (data, callback) => {
@@ -2279,6 +2272,7 @@ io.on("connection", (socket) => {
       }
       startTimer(team);
       
+      // PERBAIKAN: Kirim ke SEMUA client
       io.emit("playTeamAudio", {
         team: team,
         audioFile: teamAudioFile,
