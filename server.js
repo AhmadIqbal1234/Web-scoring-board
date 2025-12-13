@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -20,6 +20,85 @@ const PORT = process.env.PORT || 8080;
 const WS_PORT = process.env.WS_PORT || 8081;
 const TEAM_COUNT = 12;
 const isProduction = process.env.NODE_ENV === 'production';
+
+// ===== STATE PERSISTENCE =====
+const STATE_FILE = join(__dirname, 'state.json');
+
+// Fungsi untuk memuat state dari file
+function loadPersistedState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const data = fs.readFileSync(STATE_FILE, 'utf8');
+      const state = JSON.parse(data);
+      
+      if (state.scores && Array.isArray(state.scores)) {
+        scores = state.scores;
+        logger.info(`State loaded from file: ${scores.length} scores restored`);
+      }
+      
+      if (state.config) {
+        config = state.config;
+        logger.info('Config restored from file');
+      }
+      
+      if (state.teamToggleState && Array.isArray(state.teamToggleState)) {
+        teamToggleState = state.teamToggleState;
+        logger.info('Team toggle state restored from file');
+      }
+      
+      if (state.autoPenaltyEnabled !== undefined) {
+        isAutoPenaltyEnabled = state.autoPenaltyEnabled;
+        logger.info(`Auto penalty state restored: ${isAutoPenaltyEnabled}`);
+      }
+      
+      return true;
+    } else {
+      logger.info('No saved state found, using defaults');
+      return false;
+    }
+  } catch (err) {
+    logger.error('Error loading persisted state:', err);
+    return false;
+  }
+}
+
+// Fungsi untuk menyimpan state ke file
+function savePersistedState() {
+  try {
+    const state = {
+      scores: scores,
+      config: config,
+      teamToggleState: teamToggleState,
+      autoPenaltyEnabled: isAutoPenaltyEnabled,
+      timestamp: new Date().toISOString(),
+      version: '1.0'
+    };
+    
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    logger.info('State saved to file');
+    return true;
+  } catch (err) {
+    logger.error('Error saving persisted state:', err);
+    return false;
+  }
+}
+
+// Fungsi untuk menyimpan skor saja
+function saveScoresOnly() {
+  try {
+    const state = {
+      scores: scores,
+      timestamp: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    logger.info('Scores saved to file');
+    return true;
+  } catch (err) {
+    logger.error('Error saving scores:', err);
+    return false;
+  }
+}
 
 // ===== WEBSOCKET SERVER UNTUK ESP32 =====
 const wss = new WebSocketServer({ 
@@ -657,6 +736,9 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   // Update score
   scores[team - 1] += points;
   
+  // SIMPAN KE FILE
+  saveScoresOnly();
+  
   // PERBAIKAN: Kirim update ke SEMUA client
   io.emit("update", { team, score: scores[team - 1] });
   io.emit("scoring", { team, isCorrect });
@@ -850,6 +932,9 @@ function handleAutoPenalty() {
   const previousScore = scores[activeTeam - 1];
   
   scores[activeTeam - 1] += penaltyPoints;
+  
+  // SIMPAN KE FILE
+  saveScoresOnly();
   
   // PERBAIKAN: Kirim update ke SEMUA client
   io.emit("update", { team: activeTeam, score: scores[activeTeam - 1] });
@@ -1400,6 +1485,9 @@ app.get("/update", (req, res) => {
     logger.info(`Scoring: Team ${team} add ${add} points`);
     scores[team - 1] += add;
     
+    // SIMPAN KE FILE
+    saveScoresOnly();
+    
     // PERBAIKAN: Kirim ke SEMUA client
     io.emit("update", { team, score: scores[team - 1] });
     io.emit("scoring", { team, isCorrect: add > 0 });
@@ -1681,6 +1769,9 @@ app.get("/editScore", (req, res) => {
   // Update score
   scores[team - 1] = score;
   
+  // SIMPAN KE FILE
+  saveScoresOnly();
+  
   // PERBAIKAN: Broadcast ke SEMUA client
   io.emit("update", { team, score: score });
   
@@ -1709,6 +1800,9 @@ app.get("/toggleTeam", (req, res) => {
   // Update state
   teamToggleState[team - 1] = enabled;
   
+  // Simpan ke file
+  savePersistedState();
+  
   logger.info(`Team ${getTeamLetter(team)} ${enabled ? 'enabled' : 'disabled'}`, {
     team: team,
     enabled: enabled,
@@ -1732,6 +1826,9 @@ app.get("/toggleTeam", (req, res) => {
 app.get("/enableAllTeams", (req, res) => {
   teamToggleState = Array(TEAM_COUNT).fill(true);
   
+  // Simpan ke file
+  savePersistedState();
+  
   logger.info("All teams enabled");
   
   // PERBAIKAN: Kirim ke SEMUA client
@@ -1746,6 +1843,9 @@ app.get("/enableAllTeams", (req, res) => {
 
 app.get("/disableAllTeams", (req, res) => {
   teamToggleState = Array(TEAM_COUNT).fill(false);
+  
+  // Simpan ke file
+  savePersistedState();
   
   logger.info("All teams disabled");
   
@@ -1873,6 +1973,9 @@ app.get("/toggleAutoPenalty", (req, res) => {
   const enabled = req.query.enabled === 'true';
   isAutoPenaltyEnabled = enabled;
   
+  // Simpan ke file
+  savePersistedState();
+  
   // Kirim konfigurasi ke ESP32
   sendConfigToESP32();
   
@@ -1988,6 +2091,9 @@ app.get("/setconfig", (req, res) => {
     logger.info(`Config updated: timer duration = ${timerDuration} seconds`);
   }
   
+  // Simpan ke file
+  savePersistedState();
+  
   // Debug logging
   logger.websocket(`Updated config: ${JSON.stringify(config)}`, {
     rawInput: { plus, minus, timerDuration },
@@ -2007,8 +2113,14 @@ app.get("/setconfig", (req, res) => {
   res.json({ sukses: true, konfigurasi: config });
 });
 
+// ===== ENDPOINT: RESET SEMUA SKOR =====
 app.get("/reset", (req, res) => {
+  // Reset semua skor ke 0
   scores = Array(TEAM_COUNT).fill(0);
+  
+  // Simpan state kosong ke file
+  saveScoresOnly();
+  
   resetTimer();
   releaseAtomicLock();
   
@@ -2023,11 +2135,22 @@ app.get("/reset", (req, res) => {
   io.emit("reset", scores);
   io.emit("lockstate", lockState);
   
-  res.json({ sukses: true, pesan: "Skor direset dan timer direset", skor: scores });
+  logger.info('All scores reset and saved to file');
+  
+  res.json({ 
+    sukses: true, 
+    pesan: "Skor direset dan timer direset", 
+    skor: scores 
+  });
 });
 
 app.get("/scores", (req, res) => {
-  res.json(scores);
+  // Selalu kembalikan skor dari memori
+  res.json({
+    scores: scores,
+    timestamp: new Date().toISOString(),
+    persisted: fs.existsSync(STATE_FILE)
+  });
 });
 
 app.get("/lockstate", (req, res) => {
@@ -2104,6 +2227,50 @@ app.get("/debug/resetlock", (req, res) => {
   });
 });
 
+// ===== ENDPOINT DEBUG STATE =====
+app.get("/debug/state", (req, res) => {
+  res.json({
+    fileExists: fs.existsSync(STATE_FILE),
+    scores: scores,
+    config: config,
+    teamToggleState: teamToggleState,
+    autoPenaltyEnabled: isAutoPenaltyEnabled,
+    stateFile: STATE_FILE
+  });
+});
+
+app.get("/debug/forceSave", (req, res) => {
+  const saved = saveScoresOnly();
+  res.json({
+    success: saved,
+    message: saved ? "State saved successfully" : "Failed to save state",
+    scores: scores
+  });
+});
+
+app.get("/debug/clearState", (req, res) => {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      fs.unlinkSync(STATE_FILE);
+      scores = Array(TEAM_COUNT).fill(0);
+      res.json({
+        success: true,
+        message: "State file deleted and scores reset"
+      });
+    } else {
+      res.json({
+        success: false,
+        message: "State file does not exist"
+      });
+    }
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+});
+
 app.get("/health", (req, res) => {
   const now = new Date();
   res.json({ 
@@ -2128,7 +2295,8 @@ app.get("/health", (req, res) => {
     },
     koneksi: io.engine.clientsCount,
     websocket_connected: !!esp32WebSocket,
-    lingkungan: isProduction ? "produksi" : "pengembangan"
+    lingkungan: isProduction ? "produksi" : "pengembangan",
+    state_persisted: fs.existsSync(STATE_FILE)
   });
 });
 
@@ -2146,7 +2314,8 @@ app.get("/fullstate", (req, res) => {
     esp32Status: esp32Status,
     teamToggleState: teamToggleState,
     autoPenaltyEnabled: isAutoPenaltyEnabled,
-    checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+    checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+    state_persisted: fs.existsSync(STATE_FILE)
   };
   
   res.json(fullState);
@@ -2318,7 +2487,8 @@ io.on("connection", (socket) => {
       esp32Status: esp32Status,
       teamToggleState: teamToggleState,
       autoPenaltyEnabled: isAutoPenaltyEnabled,
-      checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+      checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+      state_persisted: fs.existsSync(STATE_FILE)
     };
     
     socket.emit("fullStateSync", fullState);
@@ -2346,17 +2516,33 @@ setInterval(monitorESP32WebSocket, 10000);
 
 // ===== MEMULAI SERVER =====
 async function startServer() {
+  // Muat state yang tersimpan
+  const stateLoaded = loadPersistedState();
+  
+  if (stateLoaded) {
+    logger.info(`Persisted state loaded: ${scores.length} scores`);
+  } else {
+    // Inisialisasi dengan default
+    scores = Array(TEAM_COUNT).fill(0);
+    config = { plus: 5, minus: -2, timerDuration: 30 };
+    teamToggleState = Array(TEAM_COUNT).fill(true);
+    isAutoPenaltyEnabled = true;
+  }
+  
   validateAudioFiles();
   
   http.listen(PORT, async () => {
     console.log('========================================');
     console.log('SISTEM KUIS Ridwan and Team');
     console.log('========================================');
+    console.log(`State Persistence: ${fs.existsSync(STATE_FILE) ? 'AKTIF' : 'BARU'}`);
+    console.log(`Skor yang dimuat: ${scores.join(', ')}`);
     console.log(`Lingkungan: ${isProduction ? 'PRODUKSI' : 'PENGEMBANGAN'}`);
     console.log(`Socket.IO Server: http://localhost:${PORT}`);
     console.log(`WebSocket Server (ESP32): ws://localhost:${PORT}/esp32ws`);
     console.log(`Admin: http://localhost:${PORT}/admin.html`);
     console.log(`Display: http://localhost:${PORT}/index.html`);
+    console.log(`State File: ${STATE_FILE}`);
     console.log('========================================');
   });
 }
