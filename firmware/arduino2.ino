@@ -1,7 +1,7 @@
 /*
   ESP32 Quiz Buzzer System - WebSocket Version
-  VERSION 4.0 - WebSocket Protocol with Binary Messages
-  Optimized for race condition handling with gateway
+  VERSION 4.1 - Perbaikan Nilai Minus dan Koneksi WebSocket
+  Optimized for Railway SSL dengan perbaikan konfigurasi
 */
 
 #include <WiFi.h>
@@ -14,7 +14,7 @@
 // ========== KONFIGURASI UNTUK RAILWAY SSL ==========
 const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app"; // Domain tanpa http://
 const int   WS_PORT = 443;                                                     // Port untuk WSS
-const char* WS_PATH = "/";                                                     // Path WebSocket
+const char* WS_PATH = "/esp32ws";                                              // PERBAIKAN: Path yang benar
 const char* WIFI_AP_NAME = "Quiz_Config_WS";
 
 // ========== PIN DEFINITION ==========
@@ -102,7 +102,7 @@ unsigned long globalLockStartTime = 0;
 // Configuration
 struct Config {
   int plusPoints = 5;
-  int minusPoints = -2;
+  int minusPoints = -2;  // PERBAIKAN: Default negatif
   int timerDuration = 30;
   bool autoPenalty = true;
 } config;
@@ -143,8 +143,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n========================================");
-  Serial.println("ESP32 QUIZ BUZZER - WebSocket Version 4.0");
-  Serial.println("Optimized for Railway SSL/HTTPS");
+  Serial.println("ESP32 QUIZ BUZZER - WebSocket Version 4.1");
+  Serial.println("Perbaikan Nilai Minus & WebSocket Path");
   Serial.println("========================================");
   
   // Initialize pins
@@ -178,10 +178,15 @@ void setup() {
   Serial.println(WS_PORT);
   Serial.print("Path: ");
   Serial.println(WS_PATH);
+  Serial.print("Config: plus=");
+  Serial.print(config.plusPoints);
+  Serial.print(", minus=");
+  Serial.print(config.minusPoints);
+  Serial.print(", timer=");
+  Serial.print(config.timerDuration);
+  Serial.println("s");
   
   // PERBAIKAN: Gunakan beginSSL untuk koneksi WSS (WebSocket Secure)
-  // Jika menggunakan port 443, gunakan beginSSL
-  // Jika menggunakan port 80, gunakan begin
   if (WS_PORT == 443) {
     // Untuk Railway dengan SSL
     webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
@@ -194,9 +199,6 @@ void setup() {
   
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
-  
-  // PERBAIKAN: Hapus setInsecure() karena tidak didukung
-  // webSocket.setInsecure(); // HAPUS BARIS INI
   
   // Enable heartbeat untuk menjaga koneksi
   webSocket.enableHeartbeat(15000, 3000, 2);
@@ -333,7 +335,7 @@ void clearAllLEDs() {
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_CONNECTED:
-      Serial.printf("[WS] Connected to server!\n");
+      Serial.printf("[WS] Connected to server at path %s!\n", WS_PATH);
       wsConnected = true;
       wsConnectTime = millis();
       digitalWrite(LED_HIJAU, HIGH);
@@ -592,9 +594,17 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
     case MSG_CONFIG_UPDATE:
       if (length >= 6) {
         config.plusPoints = payload[1];
-        config.minusPoints = (int8_t)payload[2];
+        
+        // PERBAIKAN: Konversi byte ke signed integer yang benar
+        int8_t minusByte = payload[2];
+        config.minusPoints = minusByte;  // Langsung assign karena sudah signed
+        
         config.timerDuration = payload[3];
         config.autoPenalty = payload[4] == 1;
+        
+        // Debug logging
+        Serial.printf("[CONFIG-DEBUG] Received config: plus=%d, minus=%d (raw: %d, signed: %d)\n", 
+                      config.plusPoints, config.minusPoints, payload[2], minusByte);
         
         Serial.printf("[WS] Config updated: +%d, %d, Timer %d, AutoPenalty %s\n",
                      config.plusPoints, config.minusPoints, config.timerDuration,
@@ -728,6 +738,10 @@ void handleJuryButtons() {
   if (now - lastJuryPress < 300) return; // Debounce
   
   if (corrPressed && lockActive && activeTeam > 0) {
+    // Debug logging
+    Serial.printf("[JURY-DEBUG] Sending correct action: Team %d, plusPoints = %d\n", 
+                  activeTeam, config.plusPoints);
+    
     // Send jury action via WebSocket
     uint8_t buffer[9];
     buffer[0] = MSG_JURY_ACTION;
@@ -744,7 +758,8 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-      Serial.printf("[JURY] Correct for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
+      Serial.printf("[JURY] Correct for Team %s (+%d points)\n", 
+                    TEAM_MAPPINGS[activeTeam-1].teamName, config.plusPoints);
       
       // Feedback
       for (int i = 0; i < 2; i++) {
@@ -761,6 +776,12 @@ void handleJuryButtons() {
   }
   
   if (wrongPressed && lockActive && activeTeam > 0) {
+    // Debug logging
+    Serial.printf("[JURY-DEBUG] Sending wrong action: Team %d, minusPoints = %d (hex: %02X %02X)\n", 
+                  activeTeam, config.minusPoints, 
+                  (config.minusPoints >> 8) & 0xFF, 
+                  config.minusPoints & 0xFF);
+    
     // Send jury action via WebSocket
     uint8_t buffer[9];
     buffer[0] = MSG_JURY_ACTION;
@@ -777,7 +798,8 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-      Serial.printf("[JURY] Wrong for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
+      Serial.printf("[JURY] Wrong for Team %s (%d points)\n", 
+                    TEAM_MAPPINGS[activeTeam-1].teamName, config.minusPoints);
       
       // Feedback
       for (int i = 0; i < 2; i++) {
