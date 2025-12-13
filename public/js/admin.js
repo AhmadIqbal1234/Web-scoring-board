@@ -729,6 +729,7 @@ function requestFullStateSync() {
 
 // ===== FUNGSI BARU: UPDATE ALL STATE FROM SERVER =====
 function updateAllStateFromServer(stateData) {
+  // Update scores
   if (stateData.scores && Array.isArray(stateData.scores)) {
     for (let i = 1; i <= TEAM_COUNT; i++) {
       const scoreEl = document.getElementById(`score-${i}`);
@@ -738,11 +739,13 @@ function updateAllStateFromServer(stateData) {
     }
   }
   
+  // Update lock state
   if (stateData.lockState) {
     lockState = stateData.lockState;
     updateLockStateUI();
   }
   
+  // Update timer
   if (stateData.timer) {
     updateTimerStatus(
       stateData.timer.isRunning ? 'BERJALAN' : 'TIDAK AKTIF',
@@ -750,11 +753,13 @@ function updateAllStateFromServer(stateData) {
     );
   }
   
+  // Update config
   if (stateData.config) {
     config = stateData.config;
     updateConfigDisplay();
   }
   
+  // Update ESP32 status
   if (stateData.esp32Status) {
     updateESP32Status(stateData.esp32Status);
   }
@@ -1295,6 +1300,31 @@ socket.on("disconnect", () => {
   }
 });
 
+// ===== PERBAIKAN: Event scores untuk membaca data dari state.json =====
+socket.on("scores", (data) => {
+  let scoresArray;
+  
+  if (data && data.scores && Array.isArray(data.scores)) {
+    scoresArray = data.scores;
+  } else if (Array.isArray(data)) {
+    scoresArray = data;
+  } else {
+    return;
+  }
+  
+  for (let i = 1; i <= TEAM_COUNT; i++) {
+    const scoreEl = document.getElementById(`score-${i}`);
+    if (scoreEl && scoresArray[i-1] !== undefined) {
+      scoreEl.textContent = scoresArray[i-1];
+    }
+  }
+  
+  adminLogger.info('Scores updated via Socket.IO', { 
+    scores: scoresArray,
+    source: 'socket'
+  });
+});
+
 socket.on("buzz", (data) => {
   const { team, lockId, lockSequence } = data;
   
@@ -1704,7 +1734,7 @@ function updateLockStateUI() {
   }
 }
 
-// ===== FUNGSI BARU: LOAD INITIAL DATA =====
+// ===== PERBAIKAN: LOAD INITIAL DATA DENGAN FORMAT YANG BENAR =====
 async function loadInitialData() {
   try {
     const [
@@ -1725,7 +1755,20 @@ async function loadInitialData() {
     
     lockState = lockStateRes;
     
-    if (Array.isArray(scoresRes)) {
+    // PERBAIKAN: Ambil skor dengan benar dari respons
+    if (scoresRes && scoresRes.scores && Array.isArray(scoresRes.scores)) {
+      for (let i = 1; i <= TEAM_COUNT; i++) {
+        const scoreEl = document.getElementById(`score-${i}`);
+        if (scoreEl) {
+          scoreEl.textContent = scoresRes.scores[i-1];
+        }
+      }
+      adminLogger.info('Scores loaded from state.json', { 
+        scores: scoresRes.scores,
+        persisted: scoresRes.persisted 
+      });
+    } else if (Array.isArray(scoresRes)) {
+      // Fallback untuk format lama
       for (let i = 1; i <= TEAM_COUNT; i++) {
         const scoreEl = document.getElementById(`score-${i}`);
         if (scoreEl) {
@@ -1767,7 +1810,8 @@ async function loadInitialData() {
     adminLogger.info('Initial data loaded successfully', {
       lockState: lockState,
       timerRunning: timerRes?.timerRunning,
-      esp32Connected: esp32Res.terhubung
+      esp32Connected: esp32Res.terhubung,
+      scoresLoaded: scoresRes?.scores ? true : false
     });
     
     return true;
