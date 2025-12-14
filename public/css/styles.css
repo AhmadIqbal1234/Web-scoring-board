@@ -743,3 +743,71 @@ footer h5 {
   from { transform: translateX(0); }
   to   { transform: translateX(-100%); }
 }
+
+/* ===== DISPLAY NETWORK STATUS ===== */
+.display-network-status {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 5px 10px;
+  border-radius: 15px;
+  backdrop-filter: blur(5px);
+  z-index: 1000;
+  font-size: 12px;
+}
+
+.display-network-indicator {
+  font-size: 12px;
+  width: 10px;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.display-network-indicator.good {
+  color: #4caf50;
+  animation: pulse 2s infinite;
+}
+
+.display-network-indicator.medium {
+  color: #ff9800;
+}
+
+.display-network-indicator.poor {
+  color: #f44336;
+  animation: pulse-danger 1s infinite;
+}
+
+.display-network-indicator.unknown {
+  color: #999;
+}
+
+.display-network-text {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@keyframes pulse-danger {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Responsif untuk display */
+@media (max-width: 768px) {
+  .display-network-status {
+    top: 5px;
+    right: 5px;
+    padding: 3px 8px;
+  }
+  
+  .display-network-text {
+    font-size: 10px;
+  }
+}

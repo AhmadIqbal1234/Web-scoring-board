@@ -1,4 +1,4 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -8,6 +8,7 @@ import fs from 'fs';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { WebSocketServer } from 'ws';
+import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -129,6 +130,159 @@ let esp32WebSocket = null;
 let esp32WebSocketId = null;
 let lastESP32Heartbeat = null;
 
+// ===== SISTEM DETEKSI JARINGAN INTERNET =====
+let networkStatus = {
+  quality: 'unknown', // 'good', 'medium', 'poor'
+  latency: 0,
+  lastCheck: null,
+  externalIP: null,
+  internalIP: null,
+  pingHistory: [],
+  isOnline: false
+};
+
+// Fungsi untuk mendapatkan IP internal
+function getInternalIP() {
+  const interfaces = require('os').networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+// Fungsi untuk mendapatkan IP eksternal
+async function getExternalIP() {
+  return new Promise((resolve, reject) => {
+    https.get('https://api.ipify.org?format=json', { timeout: 5000 }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          resolve(json.ip);
+        } catch {
+          resolve(null);
+        }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
+// Fungsi untuk mengukur latency ke server eksternal
+async function measureLatency(hostname = 'google.com') {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const req = https.get(`https://${hostname}`, { timeout: 5000 }, (res) => {
+      const latency = Date.now() - start;
+      res.on('data', () => {});
+      res.on('end', () => resolve({ success: true, latency, hostname }));
+    });
+    
+    req.on('error', (err) => {
+      resolve({ success: false, latency: 0, error: err.message });
+    });
+    
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, latency: 5000, error: 'timeout' });
+    });
+  });
+}
+
+// Fungsi utama untuk memeriksa kualitas jaringan
+async function checkNetworkQuality() {
+  const startTime = Date.now();
+  
+  try {
+    // Cek koneksi ke beberapa server
+    const testServers = [
+      'google.com',
+      'cloudflare.com',
+      '1.1.1.1'
+    ];
+    
+    const results = await Promise.all(
+      testServers.map(server => measureLatency(server))
+    );
+    
+    // Filter hanya yang berhasil
+    const successfulResults = results.filter(r => r.success);
+    
+    if (successfulResults.length === 0) {
+      // Tidak ada koneksi internet
+      networkStatus = {
+        quality: 'poor',
+        latency: 0,
+        lastCheck: new Date(),
+        externalIP: networkStatus.externalIP,
+        internalIP: getInternalIP(),
+        pingHistory: [...networkStatus.pingHistory, {
+          timestamp: new Date(),
+          latency: 0,
+          quality: 'poor'
+        }].slice(-10), // Simpan 10 history terakhir
+        isOnline: false
+      };
+    } else {
+      // Hitung latency rata-rata
+      const avgLatency = successfulResults.reduce((sum, r) => sum + r.latency, 0) / successfulResults.length;
+      
+      // Tentukan kualitas berdasarkan latency
+      let quality = 'good';
+      if (avgLatency > 300) {
+        quality = 'poor';
+      } else if (avgLatency > 100) {
+        quality = 'medium';
+      }
+      
+      // Dapatkan IP eksternal jika belum ada
+      let externalIP = networkStatus.externalIP;
+      if (!externalIP) {
+        externalIP = await getExternalIP();
+      }
+      
+      networkStatus = {
+        quality,
+        latency: Math.round(avgLatency),
+        lastCheck: new Date(),
+        externalIP,
+        internalIP: getInternalIP(),
+        pingHistory: [...networkStatus.pingHistory, {
+          timestamp: new Date(),
+          latency: Math.round(avgLatency),
+          quality
+        }].slice(-10),
+        isOnline: true
+      };
+    }
+    
+    logger.info(`Network quality check: ${networkStatus.quality} (${networkStatus.latency}ms)`, {
+      online: networkStatus.isOnline,
+      internalIP: networkStatus.internalIP,
+      externalIP: networkStatus.externalIP
+    });
+    
+    // Kirim update ke semua client
+    io.emit("networkStatus", networkStatus);
+    
+  } catch (error) {
+    logger.error('Network quality check failed:', error);
+    
+    networkStatus = {
+      ...networkStatus,
+      quality: 'poor',
+      lastCheck: new Date(),
+      isOnline: false
+    };
+    
+    io.emit("networkStatus", networkStatus);
+  }
+}
+
 // ===== PENGAMANAN =====
 app.use(helmet({
   contentSecurityPolicy: {
@@ -173,7 +327,8 @@ const limiter = rateLimit({
       '/timerstatus',
       '/synctimer',
       '/ping',
-      '/debug/monitoring'
+      '/debug/monitoring',
+      '/networkStatus'
     ];
     
     const isWhitelistedIP = whitelistIPs.some(ip => clientIP && clientIP.includes(ip));
@@ -283,6 +438,11 @@ const logger = {
       const timestamp = new Date().toLocaleTimeString('id-ID');
       console.log(`[${timestamp}] PERF: ${message}`, data ? JSON.stringify(data, null, 2) : '');
     }
+  },
+  
+  network: (message, data = null) => {
+    const timestamp = new Date().toLocaleTimeString('id-ID');
+    console.log(`[${timestamp}] NETWORK: ${message}`, data ? JSON.stringify(data, null, 2) : '');
   }
 };
 
@@ -741,7 +901,7 @@ function handleESP32JuryAction(buffer, socketId, clientIP) {
   
   // PERBAIKAN: Kirim update ke SEMUA client
   io.emit("update", { team, score: scores[team - 1] });
-  io.emit("scoring", { team, isCorrect });
+  io.emit("scoring", { team, isCorrect: false });
   
   // Mainkan audio juri ke SEMUA client
   timerAudio.playJuryAudio(isCorrect);
@@ -1702,6 +1862,15 @@ app.get("/test/config", (req, res) => {
   });
 });
 
+// ===== ENDPOINT: NETWORK STATUS =====
+app.get("/networkStatus", (req, res) => {
+  res.json({
+    success: true,
+    network: networkStatus,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ===== MELAYANI FILE STATIS =====
 const possiblePublicDirs = [
   join(process.cwd(), "public"),
@@ -2201,6 +2370,7 @@ app.get("/debug/connections", (req, res) => {
     scores: scores,
     config: config,
     autoPenalty: isAutoPenaltyEnabled,
+    networkStatus: networkStatus,
     timestamp: new Date().toISOString()
   });
 });
@@ -2235,6 +2405,7 @@ app.get("/debug/state", (req, res) => {
     config: config,
     teamToggleState: teamToggleState,
     autoPenaltyEnabled: isAutoPenaltyEnabled,
+    networkStatus: networkStatus,
     stateFile: STATE_FILE
   });
 });
@@ -2284,6 +2455,7 @@ app.get("/health", (req, res) => {
       lastTimerEvent: lastTimerEvent
     },
     esp32: esp32Status,
+    network: networkStatus,
     penaltiOtomatis: {
       diaktifkan: isAutoPenaltyEnabled,
       poinPenalti: config.minus
@@ -2312,6 +2484,7 @@ app.get("/fullstate", (req, res) => {
     },
     config: config,
     esp32Status: esp32Status,
+    networkStatus: networkStatus,
     teamToggleState: teamToggleState,
     autoPenaltyEnabled: isAutoPenaltyEnabled,
     checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
@@ -2396,6 +2569,7 @@ io.on("connection", (socket) => {
   socket.emit("lockstate", lockState);
   socket.emit("teamToggleState", teamToggleState);
   socket.emit("esp32Status", esp32Status);
+  socket.emit("networkStatus", networkStatus);
   socket.emit("autoPenaltyStatus", { 
     diaktifkan: isAutoPenaltyEnabled,
     poinPenalti: config.minus 
@@ -2411,6 +2585,10 @@ io.on("connection", (socket) => {
 
   socket.on("getESP32Status", () => {
     socket.emit("esp32Status", esp32Status);
+  });
+
+  socket.on("getNetworkStatus", () => {
+    socket.emit("networkStatus", networkStatus);
   });
 
   // Event untuk kontrol timer
@@ -2485,6 +2663,7 @@ io.on("connection", (socket) => {
       },
       config: config,
       esp32Status: esp32Status,
+      networkStatus: networkStatus,
       teamToggleState: teamToggleState,
       autoPenaltyEnabled: isAutoPenaltyEnabled,
       checksum: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
@@ -2514,6 +2693,9 @@ io.on("connection", (socket) => {
 setInterval(checkESP32Status, 60000);
 setInterval(monitorESP32WebSocket, 10000);
 
+// ===== MONITORING JARINGAN =====
+setInterval(checkNetworkQuality, 30000);
+
 // ===== MEMULAI SERVER =====
 async function startServer() {
   // Muat state yang tersimpan
@@ -2530,6 +2712,11 @@ async function startServer() {
   }
   
   validateAudioFiles();
+  
+  // Jalankan pengecekan jaringan pertama kali
+  setTimeout(() => {
+    checkNetworkQuality();
+  }, 2000);
   
   http.listen(PORT, async () => {
     console.log('========================================');

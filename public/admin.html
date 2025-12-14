@@ -28,6 +28,62 @@
 
   <main class="admin-main">
     <section class="admin-panel">
+      <h2 class="panel-title">Status Jaringan Server</h2>
+      
+      <div class="network-status-panel">
+        <div class="network-info">
+          <div class="network-header">
+            <div class="network-title">Kualitas Koneksi Internet</div>
+            <div class="network-indicator unknown" id="networkIndicator">●</div>
+          </div>
+          
+          <div class="network-details">
+            <div class="detail-item">
+              <span class="detail-label">Status:</span>
+              <span class="detail-value" id="networkQuality">Mengecek...</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Latency:</span>
+              <span class="detail-value" id="networkLatency">-</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">IP Server:</span>
+              <span class="detail-value" id="networkIP">Mengecek...</span>
+            </div>
+            
+            <div class="detail-item">
+              <span class="detail-label">Terakhir Diperiksa:</span>
+              <span class="detail-value" id="networkLastCheck">-</span>
+            </div>
+          </div>
+          
+          <div class="network-legend">
+            <div class="legend-item">
+              <span class="legend-color good"></span>
+              <span class="legend-text">Kuat (&lt;100ms)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color medium"></span>
+              <span class="legend-text">Sedang (100-300ms)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-color poor"></span>
+              <span class="legend-text">Jelek (&gt;300ms)</span>
+            </div>
+          </div>
+          
+          <div class="network-actions">
+            <button id="refreshNetwork" class="admin-btn btn-info">
+              <span class="network-icon"></span> CEK JARINGAN
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-panel">
       <h2 class="panel-title">Konfigurasi Sistem</h2>
       
       <div class="config-section">
