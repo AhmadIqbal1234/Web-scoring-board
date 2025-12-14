@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -26,16 +26,6 @@ let esp32Status = {
   rssiHistory: []
 };
 
-// ===== NETWORK STATUS VARIABLES =====
-let networkStatus = {
-  quality: 'unknown',
-  latency: 0,
-  lastCheck: null,
-  externalIP: null,
-  internalIP: null,
-  isOnline: false
-};
-
 // ===== LOGGER =====
 const adminLogger = {
   info: (message, data = null) => {
@@ -56,11 +46,6 @@ const adminLogger = {
   warning: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
     console.warn(`[ADMIN:${timestamp}] ${message}`, data || '');
-  },
-  
-  network: (message, data = null) => {
-    const timestamp = new Date().toLocaleTimeString('id-ID');
-    console.log(`[ADMIN:${timestamp}] NETWORK: ${message}`, data || '');
   }
 };
 
@@ -387,125 +372,6 @@ function updateESP32Status(status) {
   }
 }
 
-// ===== UPDATE NETWORK STATUS DISPLAY =====
-function updateNetworkStatus(status) {
-  const networkIndicator = document.getElementById("networkIndicator");
-  const networkQuality = document.getElementById("networkQuality");
-  const networkLatency = document.getElementById("networkLatency");
-  const networkIP = document.getElementById("networkIP");
-  const networkLastCheck = document.getElementById("networkLastCheck");
-  
-  // Simpan status
-  networkStatus = { ...networkStatus, ...status };
-  
-  // Update indikator visual
-  if (networkIndicator) {
-    networkIndicator.className = "network-indicator";
-    networkIndicator.classList.add(networkStatus.quality);
-    
-    // Tambah tooltip
-    networkIndicator.title = `Kualitas jaringan: ${networkStatus.quality.toUpperCase()}\nLatency: ${networkStatus.latency}ms`;
-  }
-  
-  // Update teks kualitas
-  if (networkQuality) {
-    let qualityText = "";
-    switch(networkStatus.quality) {
-      case 'good':
-        qualityText = "KUAT";
-        networkQuality.style.color = "#4caf50";
-        networkQuality.style.fontWeight = "bold";
-        break;
-      case 'medium':
-        qualityText = "SEDANG";
-        networkQuality.style.color = "#ff9800";
-        networkQuality.style.fontWeight = "bold";
-        break;
-      case 'poor':
-        qualityText = "JELEK";
-        networkQuality.style.color = "#f44336";
-        networkQuality.style.fontWeight = "bold";
-        break;
-      default:
-        qualityText = "MENGECEK...";
-        networkQuality.style.color = "#999";
-    }
-    networkQuality.textContent = qualityText;
-  }
-  
-  // Update latency
-  if (networkLatency) {
-    networkLatency.textContent = `${networkStatus.latency}ms`;
-    
-    // Warna berdasarkan latency
-    if (networkStatus.latency > 300) {
-      networkLatency.style.color = "#f44336";
-    } else if (networkStatus.latency > 100) {
-      networkLatency.style.color = "#ff9800";
-    } else {
-      networkLatency.style.color = "#4caf50";
-    }
-  }
-  
-  // Update IP info
-  if (networkIP) {
-    if (networkStatus.externalIP) {
-      networkIP.textContent = `Public: ${networkStatus.externalIP}`;
-      networkIP.title = `Internal: ${networkStatus.internalIP || 'N/A'}`;
-    } else {
-      networkIP.textContent = `Internal: ${networkStatus.internalIP || 'N/A'}`;
-    }
-  }
-  
-  // Update last check
-  if (networkLastCheck && networkStatus.lastCheck) {
-    const lastCheck = new Date(networkStatus.lastCheck);
-    const now = new Date();
-    const diff = Math.floor((now - lastCheck) / 1000);
-    
-    if (diff < 60) {
-      networkLastCheck.textContent = `${diff} detik lalu`;
-    } else if (diff < 3600) {
-      networkLastCheck.textContent = `${Math.floor(diff / 60)} menit lalu`;
-    } else {
-      networkLastCheck.textContent = lastCheck.toLocaleTimeString('id-ID');
-    }
-  }
-  
-  // Log jika ada perubahan signifikan
-  if (networkStatus.quality === 'poor' && networkStatus.isOnline === false) {
-    adminLogger.warning('Network quality degraded', networkStatus);
-  }
-}
-
-// ===== FUNGSI REFRESH NETWORK STATUS =====
-function refreshNetworkStatus() {
-  const refreshBtn = document.getElementById("refreshNetwork");
-  if (refreshBtn) {
-    const originalText = refreshBtn.textContent;
-    refreshBtn.disabled = true;
-    refreshBtn.innerHTML = '<span class="loading-spinner"></span> MENGECEK...';
-    
-    fetch('/networkStatus')
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          updateNetworkStatus(data.network);
-          showNotification("Status jaringan diperbarui", "info");
-        }
-      })
-      .catch(err => {
-        adminLogger.error('Network status refresh failed:', err);
-      })
-      .finally(() => {
-        setTimeout(() => {
-          refreshBtn.disabled = false;
-          refreshBtn.textContent = originalText;
-        }, 1000);
-      });
-  }
-}
-
 // ===== UPDATE TIMESTAMP =====
 function updateESP32Timestamp() {
   const now = new Date();
@@ -720,44 +586,13 @@ function initializeESP32Controls() {
       adminLogger.esp32('Tab aktif, refresh status');
       refreshESP32Status();
       socket.emit("getESP32Status");
-      socket.emit("getNetworkStatus");
     }
   });
   
   window.addEventListener('focus', function() {
     adminLogger.esp32('Window focused, refresh status');
     refreshESP32Status();
-    socket.emit("getNetworkStatus");
   });
-}
-
-// ===== INITIALIZE NETWORK STATUS =====
-function initializeNetworkStatus() {
-  // Tambahkan event listener untuk tombol refresh
-  const refreshBtn = document.getElementById("refreshNetwork");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", refreshNetworkStatus);
-  }
-  
-  // Cek status jaringan setiap 60 detik
-  setInterval(() => {
-    socket.emit("getNetworkStatus");
-  }, 60000);
-  
-  // Cek pertama kali
-  setTimeout(() => {
-    socket.emit("getNetworkStatus");
-    fetch('/networkStatus')
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          updateNetworkStatus(data.network);
-        }
-      })
-      .catch(err => {
-        console.error('Initial network status failed:', err);
-      });
-  }, 1000);
 }
 
 // ===== START ESP32 POLLING =====
@@ -927,11 +762,6 @@ function updateAllStateFromServer(stateData) {
   // Update ESP32 status
   if (stateData.esp32Status) {
     updateESP32Status(stateData.esp32Status);
-  }
-  
-  // Update network status
-  if (stateData.networkStatus) {
-    updateNetworkStatus(stateData.networkStatus);
   }
   
   adminLogger.info("All state updated from server", {
@@ -1456,7 +1286,6 @@ socket.on("connect", () => {
   
   setTimeout(() => {
     socket.emit("getESP32Status");
-    socket.emit("getNetworkStatus");
     refreshESP32Status();
     fetchFullState();
   }, 500);
@@ -1554,12 +1383,6 @@ socket.on("esp32Status", (status) => {
     socketId: status.socketId
   });
   updateESP32Status(status);
-});
-
-// ===== NETWORK STATUS SOCKET EVENT =====
-socket.on("networkStatus", (status) => {
-  console.log("Network status received via Socket.IO:", status);
-  updateNetworkStatus(status);
 });
 
 socket.on("esp32Warning", (data) => {
@@ -1920,16 +1743,14 @@ async function loadInitialData() {
       esp32Res, 
       toggleStateRes, 
       configRes, 
-      timerRes,
-      networkRes
+      timerRes
     ] = await Promise.all([
       fetch('/lockstate').then(r => r.json()),
       fetch('/scores').then(r => r.json()),
       fetch('/debug/esp32').then(r => r.json()),
       fetch('/teamToggleState').then(r => r.json()),
       fetch('/config').then(r => r.json()),
-      fetch('/timerstatus').then(r => r.json()),
-      fetch('/networkStatus').then(r => r.json())
+      fetch('/timerstatus').then(r => r.json())
     ]);
     
     lockState = lockStateRes;
@@ -1983,10 +1804,6 @@ async function loadInitialData() {
       );
     }
     
-    if (networkRes.success) {
-      updateNetworkStatus(networkRes.network);
-    }
-    
     updateLockStateUI();
     updateJuryControls(lockState.activeTeam);
     
@@ -1994,7 +1811,6 @@ async function loadInitialData() {
       lockState: lockState,
       timerRunning: timerRes?.timerRunning,
       esp32Connected: esp32Res.terhubung,
-      networkQuality: networkRes.network?.quality,
       scoresLoaded: scoresRes?.scores ? true : false
     });
     
@@ -2016,7 +1832,6 @@ function initializeAdmin() {
     initializeESP32Controls();
     initializeAutoPenaltyToggle();
     initializeEditScoreFeature();
-    initializeNetworkStatus();
     updateTimerStatus('TIDAK AKTIF', 0);
     
     for (let i = 1; i <= TEAM_COUNT; i++) {
@@ -2064,8 +1879,8 @@ document.addEventListener('DOMContentLoaded', function() {
   
   const versionInfo = document.createElement('div');
   versionInfo.className = 'version-info';
-  versionInfo.textContent = 'v2.3.0';
-  versionInfo.title = 'Sistem dengan atomic lock, state recovery, WebSocket integration, edit skor manual, dan deteksi jaringan';
+  versionInfo.textContent = 'v2.2.1';
+  versionInfo.title = 'Sistem dengan atomic lock, state recovery, WebSocket integration, dan edit skor manual';
   
   const header = document.querySelector('.admin-header');
   if (header) {
@@ -2090,39 +1905,6 @@ document.addEventListener('DOMContentLoaded', function() {
       box-shadow: 0 0 15px gold !important;
       transform: scale(1.05);
       transition: all 0.3s ease;
-    }
-    
-    /* Network indicator animations */
-    @keyframes pulse-danger {
-      0% { opacity: 1; }
-      50% { opacity: 0.5; }
-      100% { opacity: 1; }
-    }
-    
-    .network-indicator.good {
-      color: #4caf50;
-      text-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
-      animation: pulse 2s infinite;
-    }
-    
-    .network-indicator.medium {
-      color: #ff9800;
-      text-shadow: 0 0 8px rgba(255, 152, 0, 0.5);
-    }
-    
-    .network-indicator.poor {
-      color: #f44336;
-      text-shadow: 0 0 8px rgba(244, 67, 54, 0.5);
-      animation: pulse-danger 1.5s infinite;
-    }
-    
-    .network-indicator.unknown {
-      color: #999;
-    }
-    
-    .network-icon::before {
-      content: "🌐";
-      margin-right: 5px;
     }
   `;
   document.head.appendChild(style);

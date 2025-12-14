@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const board = document.getElementById("board");
 const overlay = document.getElementById("overlay");
@@ -17,13 +17,6 @@ let atomicLockState = {
 // ===== TEAM TOGGLE STATE MANAGEMENT =====
 let teamToggleState = Array(TEAM_COUNT).fill(true);
 let lastServerToggleState = Array(TEAM_COUNT).fill(true);
-
-// ===== NETWORK STATUS VARIABLES =====
-let displayNetworkStatus = {
-  quality: 'unknown',
-  latency: 0,
-  isOnline: false
-};
 
 // ===== PERFORMANCE OPTIMIZATION =====
 const BUTTON_COOLDOWN = 10;
@@ -350,60 +343,6 @@ function getTeamAudioFile(teamNumber) {
   return `Tim ${teamLetter}.mp3`;
 }
 
-// ===== UPDATE DISPLAY NETWORK STATUS =====
-function updateDisplayNetworkStatus(status) {
-  const networkIndicator = document.getElementById("displayNetworkIndicator");
-  const networkStatusText = document.getElementById("displayNetworkStatus");
-  
-  if (status) {
-    displayNetworkStatus = { ...displayNetworkStatus, ...status };
-  }
-  
-  if (networkIndicator) {
-    networkIndicator.className = "display-network-indicator";
-    networkIndicator.classList.add(displayNetworkStatus.quality);
-    
-    // Tambah tooltip
-    if (displayNetworkStatus.latency > 0) {
-      networkIndicator.title = `Latency: ${displayNetworkStatus.latency}ms`;
-    }
-  }
-  
-  if (networkStatusText) {
-    switch(displayNetworkStatus.quality) {
-      case 'good':
-        networkStatusText.textContent = "Jaringan: Baik";
-        networkStatusText.style.color = "#4caf50";
-        break;
-      case 'medium':
-        networkStatusText.textContent = "Jaringan: Sedang";
-        networkStatusText.style.color = "#ff9800";
-        break;
-      case 'poor':
-        networkStatusText.textContent = "Jaringan: Lambat";
-        networkStatusText.style.color = "#f44336";
-        break;
-      default:
-        networkStatusText.textContent = "Jaringan: Mengecek...";
-        networkStatusText.style.color = "#999";
-    }
-  }
-}
-
-// ===== TAMBAH NETWORK INDICATOR KE DISPLAY =====
-function addNetworkIndicatorToDisplay() {
-  const header = document.querySelector('.header-container');
-  if (header && !document.getElementById("displayNetworkIndicator")) {
-    const networkDiv = document.createElement('div');
-    networkDiv.className = 'display-network-status';
-    networkDiv.innerHTML = `
-      <div class="display-network-indicator unknown" id="displayNetworkIndicator">●</div>
-      <span class="display-network-text" id="displayNetworkStatus">Jaringan: Mengecek...</span>
-    `;
-    header.appendChild(networkDiv);
-  }
-}
-
 // ===== ATOMIC LOCK FUNCTIONS - OPTIMIZED =====
 function checkAtomicLock(team) {
   const now = Date.now();
@@ -644,9 +583,6 @@ socket.on("connect", () => {
     liveIndicator.title = `Socket ID: ${socket.id}`;
   }
   
-  // Tambah network indicator ke tampilan
-  addNetworkIndicatorToDisplay();
-  
   loadInitialData();
 });
 
@@ -657,10 +593,9 @@ function loadInitialData() {
     fetch('/lockstate').then(r => r.json()),
     fetch('/teamToggleState').then(r => r.json()),
     fetch('/timerstatus').then(r => r.json()),
-    fetch('/fullstate').then(r => r.json()),
-    fetch('/networkStatus').then(r => r.json())
+    fetch('/fullstate').then(r => r.json())
   ])
-  .then(([scoresData, lockStateData, toggleStateData, timerState, fullState, networkData]) => {
+  .then(([scoresData, lockStateData, toggleStateData, timerState, fullState]) => {
     // Update scores
     if (Array.isArray(scoresData.scores)) {
       for (let i = 0; i < scoresData.scores.length; i++) {
@@ -712,16 +647,10 @@ function loadInitialData() {
       }
     }
     
-    // Update network status
-    if (networkData.success) {
-      updateDisplayNetworkStatus(networkData.network);
-    }
-    
     console.log('[INIT] Initial data loaded successfully', {
       lockId: lockStateData.lockId,
       lockSequence: lockStateData.lockSequence,
-      fullStateChecksum: fullState.checksum,
-      networkQuality: networkData.network?.quality
+      fullStateChecksum: fullState.checksum
     });
   })
   .catch(err => {
@@ -737,12 +666,6 @@ socket.on("disconnect", () => {
     liveIndicator.textContent = '● OFFLINE - DISCONNECTED';
     liveIndicator.title = '';
   }
-});
-
-// ===== NETWORK STATUS SOCKET EVENT =====
-socket.on("networkStatus", (status) => {
-  console.log("Network status received:", status);
-  updateDisplayNetworkStatus(status);
 });
 
 // ===== ATOMIC BUZZ EVENT - OPTIMIZED DENGAN LOCK INFO =====
@@ -1159,6 +1082,19 @@ socket.on("esp32Status", (status) => {
     socketId: status.socketId,
     rssi: status.wifiRSSI
   });
+  
+  const esp32Indicator = document.querySelector('.esp32-indicator');
+  if (esp32Indicator) {
+    if (status.connected) {
+      esp32Indicator.style.background = '#4caf50';
+      esp32Indicator.textContent = '● ESP32 ONLINE';
+      esp32Indicator.title = `Socket ID: ${status.socketId || 'HTTP'} | RSSI: ${status.wifiRSSI || 'N/A'} dBm`;
+    } else {
+      esp32Indicator.style.background = '#f44336';
+      esp32Indicator.textContent = '● ESP32 OFFLINE';
+      esp32Indicator.title = '';
+    }
+  }
 });
 
 // PERBAIKAN: Event untuk full state sync
@@ -1198,11 +1134,6 @@ socket.on("fullStateSync", (data) => {
     });
   }
   
-  // Update network status
-  if (data.networkStatus) {
-    updateDisplayNetworkStatus(data.networkStatus);
-  }
-  
   console.log("[DISPLAY] State sync completed", {
     checksum: data.checksum,
     lockId: data.lockState?.lockId
@@ -1229,14 +1160,9 @@ function debugToggleState() {
 // ===== INITIALIZE DIPERBAIKI =====
 document.addEventListener('DOMContentLoaded', function() {
   resetTimerDisplay();
-  console.log('[DISPLAY] Initialized - Enhanced Version 2.3.0');
-  console.log('[FEATURES] Atomic lock, state recovery, audio acknowledgment, network detection');
+  console.log('[DISPLAY] Initialized - Enhanced Version 2.1.0');
+  console.log('[FEATURES] Atomic lock, state recovery, audio acknowledgment');
   console.log('[SYNC] Full state recovery supported');
-  
-  // Cek status network pertama kali
-  setTimeout(() => {
-    socket.emit("getNetworkStatus");
-  }, 1000);
   
   // Enable debug mode
   if (window.location.search.includes('debug=1')) {
@@ -1275,9 +1201,4 @@ document.addEventListener('DOMContentLoaded', function() {
       })
       .catch(err => console.error('Periodic state sync error:', err));
   }, 30000);
-  
-  // Request network status setiap 60 detik
-  setInterval(() => {
-    socket.emit("getNetworkStatus");
-  }, 60000);
 });
