@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -558,10 +558,19 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
   const activeTeams = buffer[9];
   const rssi = (buffer[10] << 8) | buffer[11];
   
+  // PERBAIKAN: Validasi RSSI - hanya terima jika negatif (WiFi valid)
+  let validatedRSSI = null;
+  if (rssi !== 0 && rssi !== 65535) { // 65535 = -1 dalam signed 16-bit
+    const signedRSSI = rssi > 32767 ? rssi - 65536 : rssi;
+    if (signedRSSI < 0) { // WiFi RSSI harus negatif
+      validatedRSSI = signedRSSI;
+    }
+  }
+  
   // Update ESP32 status
   esp32Status.modulesDetected = modulesDetected;
   esp32Status.activeTeams = activeTeams;
-  esp32Status.wifiRSSI = rssi;
+  esp32Status.wifiRSSI = validatedRSSI; // PERBAIKAN: Gunakan RSSI yang divalidasi
   esp32Status.lastActivity = new Date();
   esp32Status.lastHeartbeat = new Date();
   esp32Status.heartbeatCount++;
@@ -570,7 +579,8 @@ function handleESP32ButtonPress(buffer, socketId, clientIP) {
     timestamp: timestamp,
     modules: modulesDetected,
     teams: activeTeams,
-    rssi: rssi,
+    rssiRaw: rssi,
+    rssiValidated: validatedRSSI,
     socketId: socketId
   });
   
@@ -668,10 +678,19 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
   const lockStatus = buffer[13];
   const lockedTeam = buffer[14];
   
+  // PERBAIKAN: Validasi RSSI - hanya terima jika negatif (WiFi valid)
+  let validatedRSSI = null;
+  if (rssi !== 0 && rssi !== 65535) { // 65535 = -1 dalam signed 16-bit
+    const signedRSSI = rssi > 32767 ? rssi - 65536 : rssi;
+    if (signedRSSI < 0) { // WiFi RSSI harus negatif
+      validatedRSSI = signedRSSI;
+    }
+  }
+  
   // Update ESP32 status
   esp32Status.modulesDetected = modulesDetected;
   esp32Status.activeTeams = activeTeams;
-  esp32Status.wifiRSSI = rssi;
+  esp32Status.wifiRSSI = validatedRSSI; // PERBAIKAN: Gunakan RSSI yang divalidasi
   esp32Status.lastActivity = new Date();
   esp32Status.lastHeartbeat = new Date();
   esp32Status.heartbeatCount++;
@@ -688,7 +707,8 @@ function handleESP32Heartbeat(buffer, socketId, clientIP) {
   logger.esp32(`ESP32 heartbeat received`, {
     modules: modulesDetected,
     teams: activeTeams,
-    rssi: rssi,
+    rssiRaw: rssi,
+    rssiValidated: validatedRSSI,
     heap: heap,
     uptime: uptime,
     lockStatus: lockStatus,
@@ -1083,7 +1103,15 @@ function updateESP32FromHTTP(ip, activityType = "http_activity", data = {}) {
   // Update data yang diperlukan: modul, tim aktif, dan RSSI
   if (data.modules !== undefined && data.modules !== null) esp32Status.modulesDetected = data.modules;
   if (data.teams !== undefined && data.teams !== null) esp32Status.activeTeams = data.teams;
-  if (data.rssi !== undefined && data.rssi !== null) esp32Status.wifiRSSI = data.rssi;
+  
+  // PERBAIKAN: Validasi RSSI dari HTTP
+  if (data.rssi !== undefined && data.rssi !== null) {
+    if (data.rssi < 0) { // Hanya terima nilai negatif untuk RSSI WiFi
+      esp32Status.wifiRSSI = data.rssi;
+    } else {
+      esp32Status.wifiRSSI = null;
+    }
+  }
   
   // Update heartbeat count jika ada
   if (data.count !== undefined && data.count !== null) {
@@ -1969,7 +1997,7 @@ app.get("/debug/esp32", (req, res) => {
       `${Math.floor((now - esp32Status.lastActivity) / 1000)} detik` : "N/A",
     modulTerdeteksi: esp32Status.modulesDetected || 0,
     timAktif: esp32Status.activeTeams || 0,
-    sinyalWiFi: esp32Status.wifiRSSI || 0
+    sinyalWiFi: esp32Status.wifiRSSI || null
   });
 });
 

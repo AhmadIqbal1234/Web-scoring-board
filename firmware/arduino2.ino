@@ -1,7 +1,7 @@
 /*
   ESP32 Quiz Buzzer System - WebSocket Version
-  VERSION 4.1 - Perbaikan Nilai Minus dan Koneksi WebSocket
-  Optimized for Railway SSL dengan perbaikan konfigurasi
+  VERSION 4.2 - Real-time Monitoring Edition
+  Features: Plug & Play module detection, WiFi monitoring, Real-time status updates
 */
 
 #include <WiFi.h>
@@ -12,9 +12,9 @@
 #include <WiFiManager.h>
 
 // ========== KONFIGURASI UNTUK RAILWAY SSL ==========
-const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app"; // Domain tanpa http://
-const int   WS_PORT = 443;                                                     // Port untuk WSS
-const char* WS_PATH = "/esp32ws";                                              // PERBAIKAN: Path yang benar
+const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app";
+const int   WS_PORT = 443;
+const char* WS_PATH = "/esp32ws";  // PATH YANG BENAR
 const char* WIFI_AP_NAME = "Quiz_Config_WS";
 
 // ========== PIN DEFINITION ==========
@@ -22,7 +22,6 @@ const int LED_MERAH = 33;
 const int LED_HIJAU = 32;
 const int PIN_JURY_CORRECT = 4;
 const int PIN_JURY_WRONG = 5;
-const int MODULE_INT_PIN = 16;
 
 // ========== MODULE ADDRESSES ==========
 const uint8_t MODULE_ADDRESSES[4] = {0x20, 0x21, 0x22, 0x23};
@@ -42,11 +41,6 @@ const uint8_t MODULE_ADDRESSES[4] = {0x20, 0x21, 0x22, 0x23};
 #define MSG_CONFIG_UPDATE    0x86
 #define MSG_SYSTEM_RESET     0x87
 #define MSG_SCORE_UPDATE     0x88
-
-#define ERR_TEAM_DISABLED    0xE1
-#define ERR_INVALID_TEAM     0xE2
-#define ERR_SYSTEM_LOCKED    0xE3
-#define ERR_SERVER_ERROR     0xE4
 
 // ========== TEAM MAPPING ==========
 struct ButtonLEDMapping {
@@ -68,14 +62,24 @@ const ButtonLEDMapping TEAM_MAPPINGS[12] = {
 WebSocketsClient webSocket;
 WiFiManager wm;
 
-// System state
+// ========== REAL-TIME MONITORING VARIABLES ==========
+unsigned long lastModuleScan = 0;
+const unsigned long MODULE_SCAN_INTERVAL = 2000;  // Scan modul setiap 2 detik
+unsigned long lastWiFiCheck = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;   // Cek WiFi setiap 5 detik
+unsigned long lastBroadcast = 0;
+const unsigned long BROADCAST_INTERVAL = 30000;   // Broadcast status setiap 30 detik
+
 bool moduleEnabled[4] = {false, false, false, false};
 bool moduleDetected[4] = {false, false, false, false};
+bool previousModuleDetected[4] = {false, false, false, false};
 uint8_t enabledTeams[12] = {0};
 uint8_t activeTeamCount = 0;
 uint8_t detectedModules = 0;
+int previousWiFiRSSI = 0;
+bool moduleStateChanged = false;
 
-// Button state
+// ========== BUTTON STATE ==========
 struct ButtonState {
   bool isPressed;
   bool wasPressed;
@@ -87,55 +91,49 @@ struct ButtonState {
 
 ButtonState buttonStates[12];
 
-// WebSocket state
+// ========== WEB SOCKET STATE ==========
 bool wsConnected = false;
-unsigned long lastWSPing = 0;
-const unsigned long WS_PING_INTERVAL = 10000;
 unsigned long wsConnectTime = 0;
 
-// System state
+// ========== SYSTEM STATE ==========
 bool lockActive = false;
 int activeTeam = 0;
 bool globalButtonLock = false;
 unsigned long globalLockStartTime = 0;
 
-// Configuration
+// ========== CONFIGURATION ==========
 struct Config {
   int plusPoints = 5;
-  int minusPoints = -2;  // PERBAIKAN: Default negatif
+  int minusPoints = -2;
   int timerDuration = 30;
   bool autoPenalty = true;
 } config;
 
-// Statistics
+// ========== STATISTICS ==========
 unsigned long buttonPressCount = 0;
 unsigned long heartbeatCount = 0;
-unsigned long systemUptime = 0;
 int wifiRSSI = 0;
-
-// WiFi reset
-bool wifiResetActive = false;
-unsigned long wifiResetStartTime = 0;
-bool bothPressedLastState = false;
 
 // ========== FUNCTION PROTOTYPES ==========
 void setupWiFiManager();
 void initializeModules();
+void scanModulesRealTime();
+void monitorWiFiRealTime();
 bool checkModule(uint8_t addr);
 bool writePCF(uint8_t addr, uint8_t value);
 bool readPCF(uint8_t addr, uint8_t &value);
 void setTeamLED(uint8_t team, bool on);
 void clearAllLEDs();
-void handleWifiReset();
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length);
 void sendButtonPressWS(int team);
-void sendHeartbeatWS();
-void sendModuleStatus();
+void sendHeartbeatWS(bool forceUpdate = false);
+void sendModuleStatus(bool forceUpdate = false);
 void handleWebSocketBinary(uint8_t *payload, size_t length);
 void processButtonPress(int team);
 void handleJuryButtons();
 void resetLockState();
-void testWebSocketConnection();
+void broadcastSystemStatus();
+void updateModuleStates();
 
 // ========== SETUP ==========
 void setup() {
@@ -143,8 +141,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n========================================");
-  Serial.println("ESP32 QUIZ BUZZER - WebSocket Version 4.1");
-  Serial.println("Perbaikan Nilai Minus & WebSocket Path");
+  Serial.println("ESP32 QUIZ BUZZER - Real-time Monitoring v4.2");
+  Serial.println("Features: Plug & Play modules, WiFi monitoring");
   Serial.println("========================================");
   
   // Initialize pins
@@ -162,7 +160,7 @@ void setup() {
   
   // Initialize I2C
   Wire.begin(21, 22);
-  Wire.setClock(400000); // 400kHz for speed
+  Wire.setClock(400000);
   
   // Setup WiFi Manager
   setupWiFiManager();
@@ -178,32 +176,15 @@ void setup() {
   Serial.println(WS_PORT);
   Serial.print("Path: ");
   Serial.println(WS_PATH);
-  Serial.print("Config: plus=");
-  Serial.print(config.plusPoints);
-  Serial.print(", minus=");
-  Serial.print(config.minusPoints);
-  Serial.print(", timer=");
-  Serial.print(config.timerDuration);
-  Serial.println("s");
   
-  // PERBAIKAN: Gunakan beginSSL untuk koneksi WSS (WebSocket Secure)
-  if (WS_PORT == 443) {
-    // Untuk Railway dengan SSL
-    webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    Serial.println("[SETUP] Using SSL WebSocket (WSS)");
-  } else {
-    // Untuk koneksi non-SSL
-    webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    Serial.println("[SETUP] Using regular WebSocket (WS)");
-  }
-  
+  // Gunakan SSL untuk Railway
+  webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
-  
-  // Enable heartbeat untuk menjaga koneksi
   webSocket.enableHeartbeat(15000, 3000, 2);
   
-  Serial.println("\n[SETUP] System ready! Waiting for WebSocket connection...");
+  Serial.println("[SETUP] Using SSL WebSocket (WSS)");
+  Serial.println("\n[SETUP] System ready! Real-time monitoring active.");
   Serial.println("========================================\n");
 }
 
@@ -212,7 +193,6 @@ void setupWiFiManager() {
   WiFiManagerParameter custom_ws_server("ws_server", "WebSocket Server", DEFAULT_SERVER_WS, 100);
   wm.addParameter(&custom_ws_server);
   
-  // Set timeout lebih lama
   wm.setConfigPortalTimeout(180);
   
   if (!wm.autoConnect(WIFI_AP_NAME)) {
@@ -224,51 +204,163 @@ void setupWiFiManager() {
   Serial.println("WiFi connected!");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+  wifiRSSI = WiFi.RSSI();
   Serial.print("RSSI: ");
-  Serial.println(WiFi.RSSI());
+  Serial.println(wifiRSSI);
   Serial.print("SSID: ");
   Serial.println(WiFi.SSID());
+  
+  previousWiFiRSSI = wifiRSSI;
+}
+
+// ========== REAL-TIME MODULE MONITORING ==========
+void scanModulesRealTime() {
+  if (millis() - lastModuleScan < MODULE_SCAN_INTERVAL) return;
+  lastModuleScan = millis();
+  
+  bool changed = false;
+  uint8_t newDetectedModules = 0;
+  uint8_t newActiveTeams = 0;
+  
+  // Scan semua modul
+  for (int i = 0; i < 4; i++) {
+    bool previous = moduleDetected[i];
+    bool current = checkModule(MODULE_ADDRESSES[i]);
+    
+    moduleDetected[i] = current;
+    
+    if (previous != current) {
+      changed = true;
+      moduleStateChanged = true;
+      Serial.printf("[REALTIME] Module 0x%02X: %s -> %s\n", 
+                   MODULE_ADDRESSES[i],
+                   previous ? "PRESENT" : "MISSING",
+                   current ? "PRESENT" : "MISSING");
+    }
+    
+    if (current) {
+      newDetectedModules++;
+    }
+  }
+  
+  // Hitung tim aktif
+  for (int i = 0; i < 12; i++) {
+    int modIdx = -1;
+    for (int m = 0; m < 4; m++) {
+      if (MODULE_ADDRESSES[m] == TEAM_MAPPINGS[i].moduleAddress) {
+        modIdx = m;
+        break;
+      }
+    }
+    
+    if (modIdx != -1 && moduleDetected[modIdx]) {
+      enabledTeams[i] = 1;
+      newActiveTeams++;
+    } else {
+      enabledTeams[i] = 0;
+    }
+  }
+  
+  // Update jika ada perubahan
+  if (changed || newDetectedModules != detectedModules || newActiveTeams != activeTeamCount) {
+    detectedModules = newDetectedModules;
+    activeTeamCount = newActiveTeams;
+    
+    // Update modul yang aktif
+    for (int i = 0; i < 4; i++) {
+      moduleEnabled[i] = moduleDetected[i];
+    }
+    
+    Serial.printf("[REALTIME] Status: %d modules, %d teams active\n", 
+                 detectedModules, activeTeamCount);
+    
+    // Kirim update ke server jika ada perubahan signifikan
+    if (changed) {
+      sendModuleStatus(true);
+    }
+  }
+}
+
+// ========== REAL-TIME WIFI MONITORING ==========
+void monitorWiFiRealTime() {
+  if (millis() - lastWiFiCheck < WIFI_CHECK_INTERVAL) return;
+  lastWiFiCheck = millis();
+  
+  int newRSSI = WiFi.RSSI();
+  
+  // Jika RSSI berubah signifikan (> 5 dBm)
+  if (abs(newRSSI - previousWiFiRSSI) > 5) {
+    wifiRSSI = newRSSI;
+    previousWiFiRSSI = newRSSI;
+    
+    Serial.printf("[WIFI] RSSI updated: %d dBm (SSID: %s)\n", 
+                 wifiRSSI, WiFi.SSID().c_str());
+    
+    // Jika WiFi lemah, kirim warning
+    if (wifiRSSI < -80) {
+      Serial.println("[WIFI] WARNING: Weak signal!");
+    }
+  }
+  
+  // Cek koneksi WiFi
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WIFI] Connection lost, attempting to reconnect...");
+    WiFi.reconnect();
+  }
 }
 
 // ========== MODULE FUNCTIONS ==========
 void initializeModules() {
   Serial.println("=== MODULE INITIALIZATION ===");
   
-  activeTeamCount = 0;
-  detectedModules = 0;
-  
   for (int i = 0; i < 4; i++) {
-    bool detected = checkModule(MODULE_ADDRESSES[i]);
-    moduleDetected[i] = detected;
-    moduleEnabled[i] = detected;
+    moduleDetected[i] = checkModule(MODULE_ADDRESSES[i]);
+    moduleEnabled[i] = moduleDetected[i];
+    previousModuleDetected[i] = moduleDetected[i];
     
-    if (detected) {
+    if (moduleDetected[i]) {
       detectedModules++;
-      Serial.printf("Module 0x%02X detected\n", MODULE_ADDRESSES[i]);
-      
-      // Initialize with all LEDs off
+      Serial.printf("✓ Module 0x%02X detected\n", MODULE_ADDRESSES[i]);
       writePCF(MODULE_ADDRESSES[i], 0xFF);
-      
-      // Enable teams for this module
-      for (int t = 0; t < 12; t++) {
-        if (TEAM_MAPPINGS[t].moduleAddress == MODULE_ADDRESSES[i]) {
-          enabledTeams[t] = 1;
-          activeTeamCount++;
-          Serial.printf("  Team %s enabled\n", TEAM_MAPPINGS[t].teamName);
-        }
-      }
     } else {
-      Serial.printf("Module 0x%02X NOT detected\n", MODULE_ADDRESSES[i]);
+      Serial.printf("✗ Module 0x%02X NOT detected\n", MODULE_ADDRESSES[i]);
     }
   }
   
-  Serial.printf("Detected: %d modules, %d teams active\n", detectedModules, activeTeamCount);
+  // Hitung tim aktif
+  activeTeamCount = 0;
+  for (int i = 0; i < 12; i++) {
+    int modIdx = -1;
+    for (int m = 0; m < 4; m++) {
+      if (MODULE_ADDRESSES[m] == TEAM_MAPPINGS[i].moduleAddress) {
+        modIdx = m;
+        break;
+      }
+    }
+    
+    if (modIdx != -1 && moduleDetected[modIdx]) {
+      enabledTeams[i] = 1;
+      activeTeamCount++;
+      Serial.printf("  ✓ Team %s enabled\n", TEAM_MAPPINGS[i].teamName);
+    } else {
+      enabledTeams[i] = 0;
+    }
+  }
+  
+  Serial.printf("=== SUMMARY: %d modules, %d teams active ===\n", 
+               detectedModules, activeTeamCount);
 }
 
 bool checkModule(uint8_t addr) {
   Wire.beginTransmission(addr);
   byte error = Wire.endTransmission();
-  return error == 0;
+  
+  if (error == 0) {
+    return true;
+  } else if (error == 2) {
+    Serial.printf("[I2C] Module 0x%02X: Address NACK\n", addr);
+  }
+  return false;
 }
 
 bool writePCF(uint8_t addr, uint8_t value) {
@@ -292,7 +384,6 @@ void setTeamLED(uint8_t team, bool on) {
   int idx = team - 1;
   const ButtonLEDMapping &mapping = TEAM_MAPPINGS[idx];
   
-  // Find module index
   int modIdx = -1;
   for (int i = 0; i < 4; i++) {
     if (MODULE_ADDRESSES[i] == mapping.moduleAddress) {
@@ -301,20 +392,20 @@ void setTeamLED(uint8_t team, bool on) {
     }
   }
   
-  if (modIdx == -1 || !moduleEnabled[modIdx]) return;
+  if (modIdx == -1 || !moduleEnabled[modIdx]) {
+    Serial.printf("[LED] Module for Team %s not available\n", TEAM_MAPPINGS[idx].teamName);
+    return;
+  }
   
-  // Read current state
   uint8_t current;
   if (!readPCF(mapping.moduleAddress, current)) return;
   
-  // Update LED bit
   if (on) {
     current &= ~(1 << mapping.ledBit);
   } else {
     current |= (1 << mapping.ledBit);
   }
   
-  // Write back
   writePCF(mapping.moduleAddress, current);
 }
 
@@ -335,16 +426,14 @@ void clearAllLEDs() {
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_CONNECTED:
-      Serial.printf("[WS] Connected to server at path %s!\n", WS_PATH);
+      Serial.printf("[WS] Connected to server at %s%s\n", DEFAULT_SERVER_WS, WS_PATH);
       wsConnected = true;
       wsConnectTime = millis();
       digitalWrite(LED_HIJAU, HIGH);
       
-      // Send initial heartbeat
-      sendHeartbeatWS();
-      
-      // Send module status
-      sendModuleStatus();
+      // Kirim status awal
+      sendHeartbeatWS(true);
+      sendModuleStatus(true);
       
       Serial.println("[WS] Connection established successfully!");
       break;
@@ -356,10 +445,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       digitalWrite(LED_MERAH, LOW);
       break;
       
-    case WStype_TEXT:
-      Serial.printf("[WS] Text message: %s\n", payload);
-      break;
-      
     case WStype_BIN:
       handleWebSocketBinary(payload, length);
       break;
@@ -369,14 +454,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       digitalWrite(LED_MERAH, HIGH);
       delay(200);
       digitalWrite(LED_MERAH, LOW);
-      break;
-      
-    case WStype_PING:
-      // Serial.println("[WS] Ping received");
-      break;
-      
-    case WStype_PONG:
-      // Serial.println("[WS] Pong received");
       break;
   }
 }
@@ -393,106 +470,132 @@ void sendButtonPressWS(int team) {
   buffer[0] = MSG_BUTTON_PRESS;
   buffer[1] = team;
   
-  // Timestamp (4 bytes)
   uint32_t timestamp = millis();
   buffer[2] = (timestamp >> 24) & 0xFF;
   buffer[3] = (timestamp >> 16) & 0xFF;
   buffer[4] = (timestamp >> 8) & 0xFF;
   buffer[5] = timestamp & 0xFF;
   
-  // Sequence (2 bytes) - using button press count
   uint16_t sequence = buttonPressCount;
   buffer[6] = (sequence >> 8) & 0xFF;
   buffer[7] = sequence & 0xFF;
   
-  // Module and team info
   buffer[8] = detectedModules;
   buffer[9] = activeTeamCount;
   
-  // RSSI
   int16_t rssi = WiFi.RSSI();
   buffer[10] = (rssi >> 8) & 0xFF;
   buffer[11] = rssi & 0xFF;
   
-  // Nonce and reserved
   buffer[12] = random(256);
   buffer[13] = 0;
   
   bool sent = webSocket.sendBIN(buffer, 14);
   
   if (sent) {
-    Serial.printf("[WS] Button press sent: Team %s, Seq %d\n", 
-                  TEAM_MAPPINGS[team-1].teamName, sequence);
+    Serial.printf("[WS] Button press sent: Team %s, Seq %d, Modules: %d, RSSI: %d dBm\n", 
+                  TEAM_MAPPINGS[team-1].teamName, sequence, detectedModules, rssi);
   } else {
-    Serial.printf("[WS] Failed to send button press for Team %s\n", 
-                  TEAM_MAPPINGS[team-1].teamName);
+    Serial.printf("[WS] Failed to send for Team %s\n", TEAM_MAPPINGS[team-1].teamName);
   }
 }
 
-void sendHeartbeatWS() {
+void sendHeartbeatWS(bool forceUpdate) {
+  static unsigned long lastHeartbeatTime = 0;
+  static int lastSentModules = -1;
+  static int lastSentTeams = -1;
+  static int lastSentRSSI = 0;
+  
   if (!wsConnected) {
-    // Coba reconnect jika tidak terhubung
-    Serial.println("[WS] Not connected, attempting to reconnect...");
-    webSocket.disconnect();
-    delay(100);
-    if (WS_PORT == 443) {
-      webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    } else {
-      webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    }
+    Serial.println("[WS] Not connected for heartbeat");
     return;
   }
   
+  unsigned long now = millis();
+  
+  // Kirim setiap 30 detik atau jika ada perubahan
+  if (!forceUpdate && (now - lastHeartbeatTime < 30000)) return;
+  
   heartbeatCount++;
+  
+  bool stateChanged = (detectedModules != lastSentModules) || 
+                     (activeTeamCount != lastSentTeams) ||
+                     (abs(wifiRSSI - lastSentRSSI) > 5) ||
+                     moduleStateChanged;
   
   uint8_t buffer[16];
   buffer[0] = MSG_HEARTBEAT;
   buffer[1] = detectedModules;
   buffer[2] = activeTeamCount;
   
-  // RSSI
-  int16_t rssi = WiFi.RSSI();
+  int16_t rssi = wifiRSSI;
   buffer[3] = (rssi >> 8) & 0xFF;
   buffer[4] = rssi & 0xFF;
   
-  // Heap memory
   uint32_t heap = ESP.getFreeHeap();
   buffer[5] = (heap >> 24) & 0xFF;
   buffer[6] = (heap >> 16) & 0xFF;
   buffer[7] = (heap >> 8) & 0xFF;
   buffer[8] = heap & 0xFF;
   
-  // Uptime
-  uint32_t uptime = millis() / 1000;
+  uint32_t uptime = now / 1000;
   buffer[9] = (uptime >> 24) & 0xFF;
   buffer[10] = (uptime >> 16) & 0xFF;
   buffer[11] = (uptime >> 8) & 0xFF;
   buffer[12] = uptime & 0xFF;
   
-  // Lock state
   buffer[13] = lockActive ? 1 : 0;
   buffer[14] = activeTeam;
-  buffer[15] = 0; // reserved
+  buffer[15] = stateChanged ? 1 : 0;
   
   webSocket.sendBIN(buffer, 16);
   
-  if (heartbeatCount % 10 == 0) {
-    Serial.printf("[WS] Heartbeat #%d sent (RSSI: %d, Heap: %d)\n", 
-                  heartbeatCount, rssi, heap);
+  if (stateChanged || heartbeatCount % 5 == 0) {
+    Serial.printf("[HEARTBEAT] #%d: %d modules, %d teams, RSSI: %d dBm, Heap: %d\n", 
+                  heartbeatCount, detectedModules, activeTeamCount, rssi, heap);
   }
+  
+  lastHeartbeatTime = now;
+  lastSentModules = detectedModules;
+  lastSentTeams = activeTeamCount;
+  lastSentRSSI = wifiRSSI;
+  moduleStateChanged = false;
 }
 
-void sendModuleStatus() {
+void sendModuleStatus(bool forceUpdate) {
   if (!wsConnected) return;
   
-  uint8_t buffer[3];
+  uint8_t buffer[12];
   buffer[0] = MSG_MODULE_STATUS;
   buffer[1] = detectedModules;
   buffer[2] = activeTeamCount;
   
-  webSocket.sendBIN(buffer, 3);
-  Serial.printf("[WS] Module status sent: %d modules, %d teams\n", 
-                detectedModules, activeTeamCount);
+  // Status per modul (4 bytes)
+  for (int i = 0; i < 4; i++) {
+    buffer[3 + i] = moduleDetected[i] ? 0x01 : 0x00;
+  }
+  
+  // WiFi RSSI
+  int16_t rssi = WiFi.RSSI();
+  buffer[7] = (rssi >> 8) & 0xFF;
+  buffer[8] = rssi & 0xFF;
+  
+  // Team status bits (2 bytes untuk 12 tim)
+  uint16_t teamStatus = 0;
+  for (int i = 0; i < 12; i++) {
+    if (enabledTeams[i]) {
+      teamStatus |= (1 << i);
+    }
+  }
+  buffer[9] = (teamStatus >> 8) & 0xFF;
+  buffer[10] = teamStatus & 0xFF;
+  
+  buffer[11] = random(256);
+  
+  webSocket.sendBIN(buffer, 12);
+  
+  Serial.printf("[STATUS] Module status sent: %d modules, %d teams, RSSI: %d dBm\n",
+               detectedModules, activeTeamCount, rssi);
 }
 
 void handleWebSocketBinary(uint8_t *payload, size_t length) {
@@ -500,8 +603,7 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
   
   uint8_t msgType = payload[0];
   
-  Serial.printf("[WS] Received binary message type: 0x%02X, length: %d\n", 
-                msgType, length);
+  Serial.printf("[WS] Received message type: 0x%02X, length: %d\n", msgType, length);
   
   switch(msgType) {
     case MSG_LOCK_ACQUIRED:
@@ -511,26 +613,22 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
         uint16_t sequence = (payload[6] << 8) | payload[7];
         uint8_t timerDuration = payload[8];
         
-        Serial.printf("[WS] Lock acquired: Team %s, Seq %d, Timer %ds\n",
+        Serial.printf("[WS] 🔒 Lock acquired: Team %s, Seq %d, Timer %ds\n",
                      TEAM_MAPPINGS[team-1].teamName, sequence, timerDuration);
         
-        // Update local state
         lockActive = true;
         activeTeam = team;
         buttonStates[team-1].lockConfirmed = true;
         
-        // Set LED
         setTeamLED(team, true);
         
-        // Feedback LED
         digitalWrite(LED_HIJAU, LOW);
         delay(50);
         digitalWrite(LED_HIJAU, HIGH);
         
-        // Update config if timer duration changed
         if (timerDuration != config.timerDuration) {
           config.timerDuration = timerDuration;
-          Serial.printf("[WS] Timer duration updated to %d seconds\n", timerDuration);
+          Serial.printf("[CONFIG] Timer updated to %d seconds\n", timerDuration);
         }
       }
       break;
@@ -541,15 +639,13 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
         uint8_t reason = payload[2];
         uint8_t lockedByTeam = payload[3];
         
-        Serial.printf("[WS] Lock denied for Team %s: Reason %d, Locked by Team %s\n",
+        Serial.printf("[WS] ❌ Lock denied for Team %s: Reason %d, Locked by Team %s\n",
                      TEAM_MAPPINGS[team-1].teamName, reason, 
                      lockedByTeam > 0 ? TEAM_MAPPINGS[lockedByTeam-1].teamName : "None");
         
-        // Release LED feedback
         setTeamLED(team, false);
         buttonStates[team-1].ledFeedbackActive = false;
         
-        // Error feedback
         for (int i = 0; i < 3; i++) {
           digitalWrite(LED_MERAH, HIGH);
           delay(50);
@@ -560,10 +656,9 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       break;
       
     case MSG_LOCK_RELEASED:
-      Serial.println("[WS] System unlocked (lock released)");
+      Serial.println("[WS] 🔓 System unlocked");
       resetLockState();
       
-      // Feedback
       digitalWrite(LED_HIJAU, LOW);
       digitalWrite(LED_MERAH, LOW);
       delay(100);
@@ -572,45 +667,19 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       digitalWrite(LED_MERAH, HIGH);
       delay(100);
       digitalWrite(LED_MERAH, LOW);
-      break;
-      
-    case MSG_FORCE_UNLOCK:
-      Serial.println("[WS] System unlocked (force unlock)");
-      resetLockState();
-      
-      // Feedback
-      digitalWrite(LED_HIJAU, LOW);
-      digitalWrite(LED_MERAH, LOW);
-      delay(100);
-      digitalWrite(LED_HIJAU, HIGH);
-      digitalWrite(LED_MERAH, HIGH);
-      delay(100);
-      digitalWrite(LED_HIJAU, LOW);
-      digitalWrite(LED_MERAH, LOW);
-      delay(100);
-      digitalWrite(LED_HIJAU, HIGH);
       break;
       
     case MSG_CONFIG_UPDATE:
       if (length >= 6) {
         config.plusPoints = payload[1];
-        
-        // PERBAIKAN: Konversi byte ke signed integer yang benar
-        int8_t minusByte = payload[2];
-        config.minusPoints = minusByte;  // Langsung assign karena sudah signed
-        
+        config.minusPoints = (int8_t)payload[2];
         config.timerDuration = payload[3];
         config.autoPenalty = payload[4] == 1;
         
-        // Debug logging
-        Serial.printf("[CONFIG-DEBUG] Received config: plus=%d, minus=%d (raw: %d, signed: %d)\n", 
-                      config.plusPoints, config.minusPoints, payload[2], minusByte);
-        
-        Serial.printf("[WS] Config updated: +%d, %d, Timer %d, AutoPenalty %s\n",
+        Serial.printf("[WS] ⚙️ Config updated: +%d, %d, Timer %d, AutoPenalty %s\n",
                      config.plusPoints, config.minusPoints, config.timerDuration,
                      config.autoPenalty ? "ON" : "OFF");
         
-        // Feedback
         digitalWrite(LED_HIJAU, LOW);
         delay(100);
         digitalWrite(LED_HIJAU, HIGH);
@@ -621,17 +690,10 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       if (length >= 6) {
         uint8_t team = payload[1];
         int32_t score = (payload[2] << 24) | (payload[3] << 16) | (payload[4] << 8) | payload[5];
-        Serial.printf("[WS] Score update: Team %s = %d\n", 
+        Serial.printf("[WS] 📊 Score update: Team %s = %d\n", 
                      TEAM_MAPPINGS[team-1].teamName, score);
       }
       break;
-      
-    case MSG_SYSTEM_STATUS:
-      Serial.println("[WS] System status received");
-      break;
-      
-    default:
-      Serial.printf("[WS] Unknown message type: 0x%02X\n", msgType);
   }
 }
 
@@ -641,44 +703,36 @@ void processButtonPress(int team) {
   
   int idx = team - 1;
   
-  // Check if team is enabled
   if (enabledTeams[idx] != 1) {
-    Serial.printf("[BUTTON] Team %s is disabled, ignoring\n", TEAM_MAPPINGS[idx].teamName);
+    Serial.printf("[BUTTON] Team %s is disabled\n", TEAM_MAPPINGS[idx].teamName);
     return;
   }
   
-  // Check global lock
   if (globalButtonLock) {
     if (millis() - globalLockStartTime > 5000) {
-      globalButtonLock = false; // Timeout after 5 seconds
+      globalButtonLock = false;
     } else {
-      Serial.println("[BUTTON] Global lock active, ignoring");
+      Serial.println("[BUTTON] Global lock active");
       return;
     }
   }
   
-  // Check if already locked by another team
   if (lockActive && activeTeam != team) {
-    Serial.printf("[BUTTON] System locked by Team %s, ignoring Team %s\n", 
-                 TEAM_MAPPINGS[activeTeam-1].teamName, TEAM_MAPPINGS[idx].teamName);
+    Serial.printf("[BUTTON] System locked by Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
     return;
   }
   
-  // Check if already processed
   if (buttonStates[idx].lockConfirmed) {
-    Serial.printf("[BUTTON] Team %s already lock confirmed, ignoring\n", TEAM_MAPPINGS[idx].teamName);
+    Serial.printf("[BUTTON] Team %s already confirmed\n", TEAM_MAPPINGS[idx].teamName);
     return;
   }
   
-  // Acquire global lock
   globalButtonLock = true;
   globalLockStartTime = millis();
   
-  // Set LED feedback
   setTeamLED(team, true);
   buttonStates[idx].ledFeedbackActive = true;
   
-  // Send via WebSocket
   sendButtonPressWS(team);
   
   Serial.printf("[BUTTON] Team %s pressed, sending via WS\n", TEAM_MAPPINGS[idx].teamName);
@@ -686,67 +740,46 @@ void processButtonPress(int team) {
 
 // ========== JURY BUTTONS ==========
 void handleJuryButtons() {
+  static unsigned long lastJuryPress = 0;
+  static bool wifiResetMode = false;
+  static unsigned long wifiResetStart = 0;
+  
   bool corrPressed = digitalRead(PIN_JURY_CORRECT) == LOW;
   bool wrongPressed = digitalRead(PIN_JURY_WRONG) == LOW;
   
-  if (wifiResetActive) {
-    // Handle WiFi reset
-    if (corrPressed && wrongPressed) {
-      unsigned long elapsed = millis() - wifiResetStartTime;
-      
-      if (elapsed > 5000 && !bothPressedLastState) {
-        Serial.println("[RESET] WiFi reset triggered!");
-        wm.resetSettings();
-        delay(1000);
-        ESP.restart();
-      }
-      bothPressedLastState = true;
-    } else {
-      bothPressedLastState = false;
-    }
-    return;
-  }
-  
-  // Check for WiFi reset trigger
-  if (corrPressed && wrongPressed && !bothPressedLastState) {
-    wifiResetActive = true;
-    wifiResetStartTime = millis();
-    bothPressedLastState = true;
-    
-    Serial.println("[RESET] WiFi reset mode activated - hold for 5 seconds");
-    
-    // Visual feedback
-    digitalWrite(LED_MERAH, HIGH);
-    digitalWrite(LED_HIJAU, HIGH);
-    return;
-  }
-  
-  if (!corrPressed && !wrongPressed) {
-    if (wifiResetActive) {
-      wifiResetActive = false;
-      bothPressedLastState = false;
-      digitalWrite(LED_MERAH, LOW);
+  // WiFi reset mode
+  if (corrPressed && wrongPressed) {
+    if (!wifiResetMode) {
+      wifiResetMode = true;
+      wifiResetStart = millis();
+      Serial.println("[RESET] WiFi reset mode - hold for 5 seconds");
+      digitalWrite(LED_MERAH, HIGH);
       digitalWrite(LED_HIJAU, HIGH);
     }
+    
+    if (millis() - wifiResetStart > 5000) {
+      Serial.println("[RESET] WiFi reset triggered!");
+      wm.resetSettings();
+      delay(1000);
+      ESP.restart();
+    }
     return;
+  } else if (wifiResetMode) {
+    wifiResetMode = false;
+    digitalWrite(LED_MERAH, LOW);
+    digitalWrite(LED_HIJAU, wsConnected ? HIGH : LOW);
+    Serial.println("[RESET] WiFi reset cancelled");
   }
   
-  // Normal jury button handling
-  static unsigned long lastJuryPress = 0;
+  // Normal jury action
   unsigned long now = millis();
-  
-  if (now - lastJuryPress < 300) return; // Debounce
+  if (now - lastJuryPress < 300) return;
   
   if (corrPressed && lockActive && activeTeam > 0) {
-    // Debug logging
-    Serial.printf("[JURY-DEBUG] Sending correct action: Team %d, plusPoints = %d\n", 
-                  activeTeam, config.plusPoints);
-    
-    // Send jury action via WebSocket
     uint8_t buffer[9];
     buffer[0] = MSG_JURY_ACTION;
     buffer[1] = activeTeam;
-    buffer[2] = 1; // correct
+    buffer[2] = 1;
     buffer[3] = (config.plusPoints >> 8) & 0xFF;
     buffer[4] = config.plusPoints & 0xFF;
     
@@ -758,35 +791,23 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-      Serial.printf("[JURY] Correct for Team %s (+%d points)\n", 
-                    TEAM_MAPPINGS[activeTeam-1].teamName, config.plusPoints);
+      Serial.printf("[JURY] ✅ Correct for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
       
-      // Feedback
       for (int i = 0; i < 2; i++) {
         digitalWrite(LED_HIJAU, LOW);
         delay(80);
         digitalWrite(LED_HIJAU, HIGH);
         delay(80);
       }
-    } else {
-      Serial.println("[JURY] WebSocket not connected, cannot send jury action");
     }
-    
     lastJuryPress = now;
   }
   
   if (wrongPressed && lockActive && activeTeam > 0) {
-    // Debug logging
-    Serial.printf("[JURY-DEBUG] Sending wrong action: Team %d, minusPoints = %d (hex: %02X %02X)\n", 
-                  activeTeam, config.minusPoints, 
-                  (config.minusPoints >> 8) & 0xFF, 
-                  config.minusPoints & 0xFF);
-    
-    // Send jury action via WebSocket
     uint8_t buffer[9];
     buffer[0] = MSG_JURY_ACTION;
     buffer[1] = activeTeam;
-    buffer[2] = 0; // wrong
+    buffer[2] = 0;
     buffer[3] = (config.minusPoints >> 8) & 0xFF;
     buffer[4] = config.minusPoints & 0xFF;
     
@@ -798,20 +819,15 @@ void handleJuryButtons() {
     
     if (wsConnected) {
       webSocket.sendBIN(buffer, 9);
-      Serial.printf("[JURY] Wrong for Team %s (%d points)\n", 
-                    TEAM_MAPPINGS[activeTeam-1].teamName, config.minusPoints);
+      Serial.printf("[JURY] ❌ Wrong for Team %s\n", TEAM_MAPPINGS[activeTeam-1].teamName);
       
-      // Feedback
       for (int i = 0; i < 2; i++) {
         digitalWrite(LED_MERAH, HIGH);
         delay(80);
         digitalWrite(LED_MERAH, LOW);
         delay(80);
       }
-    } else {
-      Serial.println("[JURY] WebSocket not connected, cannot send jury action");
     }
-    
     lastJuryPress = now;
   }
 }
@@ -831,56 +847,25 @@ void resetLockState() {
   clearAllLEDs();
 }
 
-// ========== TEST WEBSOCKET CONNECTION ==========
-void testWebSocketConnection() {
-  if (!wsConnected) {
-    Serial.println("[TEST] WebSocket not connected, attempting to reconnect...");
-    webSocket.disconnect();
-    delay(1000);
-    if (WS_PORT == 443) {
-      webSocket.beginSSL(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    } else {
-      webSocket.begin(DEFAULT_SERVER_WS, WS_PORT, WS_PATH);
-    }
-    webSocket.enableHeartbeat(15000, 3000, 2);
-  }
-}
-
 // ========== MAIN LOOP ==========
 void loop() {
-  // Handle WebSocket events
   webSocket.loop();
   
-  // Handle WiFi reset
-  if (wifiResetActive) {
-    unsigned long elapsed = millis() - wifiResetStartTime;
-    
-    // Blink LEDs during reset mode
-    if (millis() % 200 < 100) {
-      digitalWrite(LED_MERAH, HIGH);
-      digitalWrite(LED_HIJAU, HIGH);
-    } else {
-      digitalWrite(LED_MERAH, LOW);
-      digitalWrite(LED_HIJAU, LOW);
-    }
-    
-    // Cancel reset if buttons released
-    if (elapsed > 10000) {
-      wifiResetActive = false;
-      digitalWrite(LED_MERAH, LOW);
-      digitalWrite(LED_HIJAU, HIGH);
-      Serial.println("[RESET] Reset mode cancelled");
-    }
-    
-    return;
-  }
+  // ========== REAL-TIME MONITORING ==========
+  // 1. Scan modul setiap 2 detik
+  scanModulesRealTime();
   
-  // Update status LEDs
+  // 2. Monitor WiFi setiap 5 detik
+  monitorWiFiRealTime();
+  
+  // 3. Send heartbeat dengan update status
+  sendHeartbeatWS(false);
+  
+  // ========== STATUS LEDS ==========
   if (wsConnected) {
     digitalWrite(LED_HIJAU, HIGH);
   } else {
     digitalWrite(LED_HIJAU, LOW);
-    // Blink red LED if not connected
     if (millis() % 1000 < 500) {
       digitalWrite(LED_MERAH, HIGH);
     } else {
@@ -888,7 +873,7 @@ void loop() {
     }
   }
   
-  // Scan buttons
+  // ========== SCAN BUTTONS ==========
   for (int modIdx = 0; modIdx < 4; modIdx++) {
     if (!moduleEnabled[modIdx]) continue;
     
@@ -910,7 +895,6 @@ void loop() {
         if (!pressed && buttonStates[teamIdx].isPressed) {
           buttonStates[teamIdx].isPressed = false;
           
-          // Turn off LED if not locked
           if (!buttonStates[teamIdx].lockConfirmed) {
             setTeamLED(TEAM_MAPPINGS[team].teamNumber, false);
             buttonStates[teamIdx].ledFeedbackActive = false;
@@ -920,48 +904,23 @@ void loop() {
     }
   }
   
-  // Handle jury buttons
+  // ========== HANDLE JURY BUTTONS ==========
   handleJuryButtons();
   
-  // Send periodic heartbeat
-  static unsigned long lastHeartbeat = 0;
-  if (millis() - lastHeartbeat > 30000) { // Every 30 seconds
-    lastHeartbeat = millis();
-    
-    if (wsConnected) {
-      sendHeartbeatWS();
-    } else {
-      Serial.println("[HEARTBEAT] WebSocket not connected, skipping heartbeat");
-      testWebSocketConnection();
-    }
-    
-    // Update WiFi RSSI
-    wifiRSSI = WiFi.RSSI();
-    
-    // Reconnect if WiFi lost
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi lost, reconnecting...");
-      WiFi.reconnect();
-    }
-  }
-  
-  // Check for WebSocket connection status
-  static unsigned long lastConnectionCheck = 0;
-  if (millis() - lastConnectionCheck > 60000) { // Every 60 seconds
-    lastConnectionCheck = millis();
-    
-    if (!wsConnected) {
-      Serial.println("[CONNECTION] WebSocket disconnected, attempting to reconnect...");
-      testWebSocketConnection();
-    }
-  }
-  
-  // Check for lock timeout (90 seconds)
+  // ========== CHECK FOR LOCK TIMEOUT ==========
   if (lockActive && millis() - globalLockStartTime > 90000) {
-    Serial.println("[TIMEOUT] Lock timeout after 90 seconds, resetting...");
+    Serial.println("[TIMEOUT] Lock timeout after 90 seconds");
     resetLockState();
   }
   
-  // Small delay to prevent watchdog
+  // ========== BROADCAST SYSTEM STATUS PERIODICALLY ==========
+  if (millis() - lastBroadcast > BROADCAST_INTERVAL) {
+    lastBroadcast = millis();
+    if (wsConnected) {
+      sendModuleStatus(true);
+      Serial.println("[BROADCAST] System status broadcasted");
+    }
+  }
+  
   delay(5);
 }

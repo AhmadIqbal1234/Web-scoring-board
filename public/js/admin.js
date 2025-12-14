@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -21,9 +21,7 @@ let esp32Status = {
   activeTeams: 0,
   modulesDetected: 0,
   wifiRSSI: null,  // PERBAIKAN: Diubah dari 0 menjadi null
-  heartbeatCount: 0,
-  lastRSSIUpdate: null,
-  rssiHistory: []
+  heartbeatCount: 0
 };
 
 // ===== LOGGER =====
@@ -216,15 +214,10 @@ function updateESP32Status(status) {
   const esp32ActiveTeams = document.getElementById("esp32ActiveTeams");
   const esp32ModulesDetected = document.getElementById("esp32ModulesDetected");
   const esp32WiFiRSSI = document.getElementById("esp32WiFiRSSI");
-  const esp32RSSIHistory = document.getElementById("esp32RSSIHistory");
   
   const sebelumnyaOnline = esp32Status.connected;
   
   esp32Status = { ...esp32Status, ...status };
-  
-  if (status.rssiHistory && Array.isArray(status.rssiHistory)) {
-    esp32Status.rssiHistory = status.rssiHistory;
-  }
   
   if (esp32Badge) {
     if (esp32Status.connected) {
@@ -295,59 +288,36 @@ function updateESP32Status(status) {
   
   // PERBAIKAN PENTING: Validasi dan tampilan WiFi RSSI
   if (esp32WiFiRSSI) {
-    // Cek apakah ESP32 terhubung dan memiliki data RSSI valid
+    // Cek apakah ESP32 terhubung dan memiliki data RSSI valid (harus negatif untuk WiFi)
     const shouldShowRSSI = esp32Status.connected && 
                           esp32Status.wifiRSSI !== null && 
                           esp32Status.wifiRSSI !== undefined &&
-                          esp32Status.wifiRSSI !== 0;
+                          esp32Status.wifiRSSI < 0;  // WiFi RSSI harus negatif
     
     if (shouldShowRSSI) {
-      // Tampilkan nilai RSSI dengan validasi range
-      let displayRSSI = esp32Status.wifiRSSI;
-      
-      // Pastikan RSSI dalam range yang wajar (-30 sampai -100 dBm)
-      if (displayRSSI > 0) displayRSSI = 0; // Jika positif, anggap 0
-      if (displayRSSI < -100) displayRSSI = -100; // Batas bawah
-      
-      esp32WiFiRSSI.textContent = `${displayRSSI} dBm`;
+      esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
       
       // Tentukan warna berdasarkan kekuatan sinyal
-      if (displayRSSI > -60) {
+      if (esp32Status.wifiRSSI > -60) {
         esp32WiFiRSSI.style.color = "#4caf50";
-        esp32WiFiRSSI.title = `Sinyal WiFi: KUAT | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
-      } else if (displayRSSI > -70) {
+        esp32WiFiRSSI.title = "Sinyal WiFi: KUAT";
+      } else if (esp32Status.wifiRSSI > -70) {
         esp32WiFiRSSI.style.color = "#ff9800";
-        esp32WiFiRSSI.title = `Sinyal WiFi: SEDANG | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
-      } else if (displayRSSI > -80) {
+        esp32WiFiRSSI.title = "Sinyal WiFi: SEDANG";
+      } else if (esp32Status.wifiRSSI > -80) {
         esp32WiFiRSSI.style.color = "#f44336";
-        esp32WiFiRSSI.title = `Sinyal WiFi: LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
+        esp32WiFiRSSI.title = "Sinyal WiFi: LEMAH";
       } else {
         esp32WiFiRSSI.style.color = "#d32f2f";
-        esp32WiFiRSSI.title = `Sinyal WiFi: SANGAT LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
-      }
-      
-      // Tampilkan history RSSI jika ada
-      if (esp32RSSIHistory && esp32Status.rssiHistory && esp32Status.rssiHistory.length > 0) {
-        const validRSSIHistory = esp32Status.rssiHistory.filter(entry => entry.rssi !== null && entry.rssi !== undefined && entry.rssi < 0);
-        if (validRSSIHistory.length > 0) {
-          const avgRSSI = Math.round(validRSSIHistory.reduce((sum, entry) => sum + entry.rssi, 0) / validRSSIHistory.length);
-          esp32RSSIHistory.textContent = `Rata-rata: ${avgRSSI} dBm (${validRSSIHistory.length} sampel)`;
-          esp32RSSIHistory.style.color = esp32WiFiRSSI.style.color;
-        } else {
-          esp32RSSIHistory.textContent = "Tidak ada data history";
-          esp32RSSIHistory.style.color = "#ff9800";
-        }
+        esp32WiFiRSSI.title = "Sinyal WiFi: SANGAT LEMAH";
       }
     } else {
-      // ESP32 offline atau tidak ada data RSSI
-      esp32WiFiRSSI.textContent = "OFFLINE";
-      esp32WiFiRSSI.style.color = "#f44336";
-      esp32WiFiRSSI.title = "ESP32 tidak terhubung atau tidak ada data sinyal";
-      
-      if (esp32RSSIHistory) {
-        esp32RSSIHistory.textContent = "Tidak ada data sinyal";
-        esp32RSSIHistory.style.color = "#ff9800";
-      }
+      // ESP32 offline atau tidak ada data RSSI valid
+      esp32WiFiRSSI.textContent = esp32Status.connected ? "MENUNGGU DATA" : "OFFLINE";
+      esp32WiFiRSSI.style.color = "#ff9800";
+      esp32WiFiRSSI.title = esp32Status.connected ? 
+        "ESP32 online, menunggu data RSSI..." : 
+        "ESP32 tidak terhubung";
     }
   }
   
@@ -560,9 +530,8 @@ function initializeESP32Controls() {
   const testBtn = document.getElementById("testESP32");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
   const syncBtn = document.getElementById("manualSync");
-  const forceUnlockWSBtn = document.getElementById("forceUnlockWS");
-  const fullStateBtn = document.getElementById("fullStateRecovery");
   
+  // Hanya gunakan button yang penting
   if (refreshBtn) {
     refreshBtn.addEventListener("click", refreshESP32Status);
   }
@@ -577,34 +546,6 @@ function initializeESP32Controls() {
 
   if (syncBtn) {
     syncBtn.addEventListener("click", manualSyncWithESP32);
-  }
-  
-  if (!forceUnlockWSBtn) {
-    const esp32Actions = document.querySelector(".controller-actions");
-    if (esp32Actions) {
-      const newBtn = document.createElement("button");
-      newBtn.id = "forceUnlockWS";
-      newBtn.className = "admin-btn btn-danger";
-      newBtn.textContent = "FORCE UNLOCK (WS)";
-      newBtn.title = "Force unlock via WebSocket langsung ke ESP32";
-      esp32Actions.appendChild(newBtn);
-      
-      newBtn.addEventListener("click", forceUnlockViaWebSocket);
-    }
-  }
-  
-  if (!fullStateBtn) {
-    const esp32Actions = document.querySelector(".controller-actions");
-    if (esp32Actions) {
-      const newBtn = document.createElement("button");
-      newBtn.id = "fullStateRecovery";
-      newBtn.className = "admin-btn btn-info";
-      newBtn.textContent = "FULL STATE SYNC";
-      newBtn.title = "Sinkronisasi state lengkap dengan ESP32";
-      esp32Actions.appendChild(newBtn);
-      
-      newBtn.addEventListener("click", requestFullStateSync);
-    }
   }
   
   startESP32RealTimePolling();
@@ -644,159 +585,6 @@ function startESP32RealTimePolling() {
   }, 10000);
   
   setInterval(updateESP32Timestamp, 1000);
-  
-  setInterval(() => {
-    if (esp32Status.connected && esp32Status.socketId) {
-      fetchFullState();
-    }
-  }, 30000);
-}
-
-// ===== FUNGSI BARU: FORCE UNLOCK VIA WEBSOCKET =====
-function forceUnlockViaWebSocket() {
-  if (!confirm("Yakin ingin membuka kunci paksa via WebSocket?\nIni akan mengirim perintah langsung ke ESP32 yang terhubung.")) return;
-  
-  const btn = document.getElementById('forceUnlockWS') || document.getElementById('forceUnlockAll');
-  const originalText = btn.textContent;
-  
-  btn.disabled = true;
-  btn.textContent = 'MENGIRIM KE ESP32...';
-  btn.classList.add('loading');
-  
-  socket.emit("forceUnlockRequest", {}, (response) => {
-    if (response && response.success) {
-      showNotification("Force unlock berhasil dikirim ke ESP32!", "success");
-      
-      lockState = { locked: false, activeTeam: null, lockId: null, lockSequence: lockState.lockSequence };
-      updateTimerStatus('TIDAK AKTIF', 0);
-      
-      const unlockBtn = document.getElementById("unlock");
-      if (unlockBtn) {
-        unlockBtn.textContent = "Buka Kunci Tombol";
-        unlockBtn.disabled = true;
-      }
-      
-      const juryControls = document.getElementById("juryControls");
-      const waitingLabel = document.getElementById("waitingLabel");
-      const activeTeamLabel = document.getElementById("activeTeamLabel");
-      
-      if (juryControls) juryControls.style.display = "none";
-      if (waitingLabel) waitingLabel.style.display = "block";
-      if (activeTeamLabel) activeTeamLabel.style.display = "none";
-      
-      adminLogger.info("Force unlock via WebSocket berhasil", response);
-    } else {
-      showNotification("Gagal mengirim force unlock via WebSocket!", "error");
-      adminLogger.error("Force unlock via WebSocket gagal", response);
-    }
-    
-    setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = originalText;
-      btn.classList.remove('loading');
-    }, 1000);
-  });
-  
-  setTimeout(() => {
-    if (btn.disabled) {
-      btn.disabled = false;
-      btn.textContent = originalText;
-      btn.classList.remove('loading');
-      showNotification("Timeout: ESP32 mungkin tidak merespons", "warning");
-    }
-  }, 5000);
-}
-
-// ===== FUNGSI BARU: REQUEST FULL STATE SYNC =====
-function requestFullStateSync() {
-  const btn = document.getElementById('fullStateRecovery');
-  const originalText = btn.textContent;
-  
-  btn.disabled = true;
-  btn.textContent = 'SYNCING STATE...';
-  btn.classList.add('loading');
-  
-  fetch('/fullstate')
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    })
-    .then(data => {
-      if (data.success) {
-        showNotification("State sync berhasil!", "success");
-        
-        updateAllStateFromServer(data);
-        
-        if (esp32Status.connected && esp32Status.socketId) {
-          socket.emit("requestStateRecovery", {}, (response) => {
-            if (response && response.success) {
-              showNotification("State sync ke ESP32 berhasil!", "success");
-            }
-          });
-        }
-        
-        adminLogger.info("Full state recovery completed", {
-          lockId: data.lockState.lockId,
-          timerRunning: data.timer.isRunning,
-          checksum: data.checksum
-        });
-      }
-    })
-    .catch(err => {
-      adminLogger.error('Full state sync failed:', err);
-      showNotification("State sync gagal!", "error");
-    })
-    .finally(() => {
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = originalText;
-        btn.classList.remove('loading');
-      }, 1000);
-    });
-}
-
-// ===== FUNGSI BARU: UPDATE ALL STATE FROM SERVER =====
-function updateAllStateFromServer(stateData) {
-  // Update scores
-  if (stateData.scores && Array.isArray(stateData.scores)) {
-    for (let i = 1; i <= TEAM_COUNT; i++) {
-      const scoreEl = document.getElementById(`score-${i}`);
-      if (scoreEl) {
-        scoreEl.textContent = stateData.scores[i-1];
-      }
-    }
-  }
-  
-  // Update lock state
-  if (stateData.lockState) {
-    lockState = stateData.lockState;
-    updateLockStateUI();
-  }
-  
-  // Update timer
-  if (stateData.timer) {
-    updateTimerStatus(
-      stateData.timer.isRunning ? 'BERJALAN' : 'TIDAK AKTIF',
-      stateData.timer.remaining || 0
-    );
-  }
-  
-  // Update config
-  if (stateData.config) {
-    config = stateData.config;
-    updateConfigDisplay();
-  }
-  
-  // Update ESP32 status
-  if (stateData.esp32Status) {
-    updateESP32Status(stateData.esp32Status);
-  }
-  
-  adminLogger.info("All state updated from server", {
-    lockId: lockState.lockId,
-    timerRunning: stateData.timer?.isRunning,
-    checksum: stateData.checksum
-  });
 }
 
 // ===== FORCE UNLOCK ALL =====
@@ -899,65 +687,53 @@ function manualSyncWithESP32() {
 }
 
 // ===== REFRESH ESP32 DATA =====
-function refreshESP32Data() {
+function refreshESP32Status() {
   adminLogger.esp32('Manual refresh requested');
   
-  fetch('/debug/esp32')
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    })
-    .then(data => {
+  const btn = document.getElementById("refreshESP32");
+  if (btn) {
+    const originalText = btn.textContent;
+    btn.textContent = "REFRESHING...";
+    btn.disabled = true;
+    
+    // Refresh data dari beberapa endpoint
+    Promise.all([
+      fetch('/debug/esp32').then(r => r.json()),
+      fetch('/esp32status').then(r => r.json())
+    ])
+    .then(([debugData, statusData]) => {
+      // Update status dengan data baru
       updateESP32Status({
-        connected: data.terhubung,
-        lastActivity: data.aktivitasTerakhir,
-        heartbeatCount: data.heartbeatCount,
-        socketId: data.socketId,
-        ip: data.ip,
-        modulesDetected: data.modulTerdeteksi,
-        activeTeams: data.timAktif,
-        wifiRSSI: data.sinyalWiFi ? parseInt(data.sinyalWiFi) : null,
-        rssiHistory: data.rssiHistory || []
+        connected: debugData.terhubung,
+        lastActivity: debugData.aktivitasTerakhir,
+        heartbeatCount: debugData.heartbeatCount,
+        socketId: debugData.socketId,
+        ip: debugData.ip,
+        modulesDetected: debugData.modulTerdeteksi,
+        activeTeams: debugData.timAktif,
+        wifiRSSI: debugData.sinyalWiFi && debugData.sinyalWiFi < 0 ? 
+                  debugData.sinyalWiFi : null
       });
       
+      showNotification("Status ESP32 diperbarui", "success");
+      
       adminLogger.esp32('Status refreshed', {
-        modules: data.modulTerdeteksi,
-        teams: data.timAktif,
-        rssi: data.sinyalWiFi,
-        historyCount: data.rssiHistory ? data.rssiHistory.length : 0
+        modules: debugData.modulTerdeteksi,
+        teams: debugData.timAktif,
+        rssi: debugData.sinyalWiFi
       });
     })
     .catch(err => {
       adminLogger.error('ESP32 refresh failed:', err);
-    });
-}
-
-function refreshESP32Status() {
-  refreshESP32Data();
-}
-
-// ===== FUNGSI BARU: FETCH FULL STATE =====
-function fetchFullState() {
-  fetch('/fullstate')
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) {
-        for (let i = 1; i <= TEAM_COUNT; i++) {
-          const sequenceEl = document.getElementById(`sequence-${i}`);
-          if (sequenceEl) {
-            if (lockState.locked && lockState.activeTeam === i) {
-              sequenceEl.textContent = `Seq: ${lockState.lockSequence || '0'}`;
-              sequenceEl.style.display = 'block';
-            } else {
-              sequenceEl.style.display = 'none';
-            }
-          }
-        }
-      }
+      showNotification("Gagal refresh status ESP32", "error");
     })
-    .catch(err => {
-      console.error('Fetch full state error:', err);
+    .finally(() => {
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.disabled = false;
+      }, 500);
     });
+  }
 }
 
 function testESP32Connection() {
@@ -1315,7 +1091,6 @@ socket.on("connect", () => {
   setTimeout(() => {
     socket.emit("getESP32Status");
     refreshESP32Status();
-    fetchFullState();
   }, 500);
 });
 
@@ -1454,7 +1229,7 @@ socket.on("esp32Activity", (activity) => {
 
 socket.on("fullStateSync", (data) => {
   console.log("Full state sync received from server:", data);
-  updateAllStateFromServer(data);
+  // Tidak perlu digunakan, kita sudah punya fungsi refresh
 });
 
 socket.on("autoPenaltyToggle", (data) => {
@@ -1485,7 +1260,6 @@ socket.on("lockstate", (state) => {
   
   const unlockBtn = document.getElementById("unlock");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
-  const forceUnlockWSBtn = document.getElementById("forceUnlockWS");
 
   if (unlockBtn) {
     unlockBtn.textContent = state.locked ? 
@@ -1496,10 +1270,6 @@ socket.on("lockstate", (state) => {
 
   if (forceUnlockBtn) {
     forceUnlockBtn.disabled = !state.locked;
-  }
-  
-  if (forceUnlockWSBtn) {
-    forceUnlockWSBtn.disabled = !state.locked;
   }
 
   updateJuryControls(state.activeTeam);
@@ -1696,7 +1466,6 @@ socket.on("systemUnlocked", (data) => {
   
   const unlockBtn = document.getElementById("unlock");
   const forceUnlockBtn = document.getElementById("forceUnlockAll");
-  const forceUnlockWSBtn = document.getElementById("forceUnlockWS");
   
   if (unlockBtn) {
     unlockBtn.textContent = "Buka Kunci Tombol";
@@ -1705,10 +1474,6 @@ socket.on("systemUnlocked", (data) => {
 
   if (forceUnlockBtn) {
     forceUnlockBtn.disabled = true;
-  }
-  
-  if (forceUnlockWSBtn) {
-    forceUnlockWSBtn.disabled = true;
   }
   
   updateJuryControls(null);
@@ -1816,7 +1581,7 @@ async function loadInitialData() {
     // PERBAIKAN: Validasi data ESP32 sebelum update
     const validRSSI = esp32Res.sinyalWiFi !== null && 
                      esp32Res.sinyalWiFi !== undefined && 
-                     esp32Res.sinyalWiFi !== 0 &&
+                     esp32Res.sinyalWiFi < 0 && // Hanya terima nilai negatif
                      esp32Res.terhubung;
     
     updateESP32Status({
@@ -1827,8 +1592,7 @@ async function loadInitialData() {
       ip: esp32Res.ip,
       modulesDetected: esp32Res.modulTerdeteksi,
       activeTeams: esp32Res.timAktif,
-      wifiRSSI: validRSSI ? parseInt(esp32Res.sinyalWiFi) : null,
-      rssiHistory: esp32Res.rssiHistory || []
+      wifiRSSI: validRSSI ? parseInt(esp32Res.sinyalWiFi) : null
     });
     
     if (timerRes) {
