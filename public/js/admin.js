@@ -1,4 +1,4 @@
-﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 const socket = io();
 const teamsContainer = document.getElementById("teams");
 const TEAM_COUNT = 12;
@@ -20,7 +20,7 @@ let esp32Status = {
   connectionType: null,
   activeTeams: 0,
   modulesDetected: 0,
-  wifiRSSI: 0,
+  wifiRSSI: null,  // PERBAIKAN: Diubah dari 0 menjadi null
   heartbeatCount: 0,
   lastRSSIUpdate: null,
   rssiHistory: []
@@ -207,7 +207,7 @@ function saveEditedScore() {
     });
 }
 
-// ===== UPDATE ESP32 STATUS =====
+// ===== PERBAIKAN: UPDATE ESP32 STATUS DENGAN VALIDASI RSSI =====
 function updateESP32Status(status) {
   const esp32Badge = document.getElementById("esp32Badge");
   const esp32Connection = document.getElementById("esp32Connection");
@@ -293,33 +293,61 @@ function updateESP32Status(status) {
     }
   }
   
+  // PERBAIKAN PENTING: Validasi dan tampilan WiFi RSSI
   if (esp32WiFiRSSI) {
-    if (esp32Status.wifiRSSI !== undefined && esp32Status.wifiRSSI !== null) {
-      esp32WiFiRSSI.textContent = `${esp32Status.wifiRSSI} dBm`;
+    // Cek apakah ESP32 terhubung dan memiliki data RSSI valid
+    const shouldShowRSSI = esp32Status.connected && 
+                          esp32Status.wifiRSSI !== null && 
+                          esp32Status.wifiRSSI !== undefined &&
+                          esp32Status.wifiRSSI !== 0;
+    
+    if (shouldShowRSSI) {
+      // Tampilkan nilai RSSI dengan validasi range
+      let displayRSSI = esp32Status.wifiRSSI;
       
-      if (esp32Status.wifiRSSI > -60) {
+      // Pastikan RSSI dalam range yang wajar (-30 sampai -100 dBm)
+      if (displayRSSI > 0) displayRSSI = 0; // Jika positif, anggap 0
+      if (displayRSSI < -100) displayRSSI = -100; // Batas bawah
+      
+      esp32WiFiRSSI.textContent = `${displayRSSI} dBm`;
+      
+      // Tentukan warna berdasarkan kekuatan sinyal
+      if (displayRSSI > -60) {
         esp32WiFiRSSI.style.color = "#4caf50";
-        esp32WiFiRSSI.title = `Sinyal WiFi: KUAT | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
-      } else if (esp32Status.wifiRSSI > -70) {
+        esp32WiFiRSSI.title = `Sinyal WiFi: KUAT | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
+      } else if (displayRSSI > -70) {
         esp32WiFiRSSI.style.color = "#ff9800";
-        esp32WiFiRSSI.title = `Sinyal WiFi: SEDANG | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
-      } else if (esp32Status.wifiRSSI > -80) {
+        esp32WiFiRSSI.title = `Sinyal WiFi: SEDANG | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
+      } else if (displayRSSI > -80) {
         esp32WiFiRSSI.style.color = "#f44336";
-        esp32WiFiRSSI.title = `Sinyal WiFi: LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
+        esp32WiFiRSSI.title = `Sinyal WiFi: LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
       } else {
         esp32WiFiRSSI.style.color = "#d32f2f";
-        esp32WiFiRSSI.title = `Sinyal WiFi: SANGAT LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Tidak ada'}`;
+        esp32WiFiRSSI.title = `Sinyal WiFi: SANGAT LEMAH | Update: ${esp32Status.lastRSSIUpdate ? new Date(esp32Status.lastRSSIUpdate).toLocaleTimeString('id-ID') : 'Baru saja'}`;
       }
       
+      // Tampilkan history RSSI jika ada
       if (esp32RSSIHistory && esp32Status.rssiHistory && esp32Status.rssiHistory.length > 0) {
-        const avgRSSI = Math.round(esp32Status.rssiHistory.reduce((sum, entry) => sum + entry.rssi, 0) / esp32Status.rssiHistory.length);
-        esp32RSSIHistory.textContent = `Rata-rata: ${avgRSSI} dBm (${esp32Status.rssiHistory.length} sampel)`;
-        esp32RSSIHistory.style.color = esp32WiFiRSSI.style.color;
+        const validRSSIHistory = esp32Status.rssiHistory.filter(entry => entry.rssi !== null && entry.rssi !== undefined && entry.rssi < 0);
+        if (validRSSIHistory.length > 0) {
+          const avgRSSI = Math.round(validRSSIHistory.reduce((sum, entry) => sum + entry.rssi, 0) / validRSSIHistory.length);
+          esp32RSSIHistory.textContent = `Rata-rata: ${avgRSSI} dBm (${validRSSIHistory.length} sampel)`;
+          esp32RSSIHistory.style.color = esp32WiFiRSSI.style.color;
+        } else {
+          esp32RSSIHistory.textContent = "Tidak ada data history";
+          esp32RSSIHistory.style.color = "#ff9800";
+        }
       }
     } else {
-      esp32WiFiRSSI.textContent = "-";
-      esp32WiFiRSSI.style.color = "#ff9800";
-      esp32WiFiRSSI.title = "Data sinyal belum tersedia";
+      // ESP32 offline atau tidak ada data RSSI
+      esp32WiFiRSSI.textContent = "OFFLINE";
+      esp32WiFiRSSI.style.color = "#f44336";
+      esp32WiFiRSSI.title = "ESP32 tidak terhubung atau tidak ada data sinyal";
+      
+      if (esp32RSSIHistory) {
+        esp32RSSIHistory.textContent = "Tidak ada data sinyal";
+        esp32RSSIHistory.style.color = "#ff9800";
+      }
     }
   }
   
@@ -1785,6 +1813,12 @@ async function loadInitialData() {
       adminLogger.info('Initial team status loaded:', teamStatus);
     }
     
+    // PERBAIKAN: Validasi data ESP32 sebelum update
+    const validRSSI = esp32Res.sinyalWiFi !== null && 
+                     esp32Res.sinyalWiFi !== undefined && 
+                     esp32Res.sinyalWiFi !== 0 &&
+                     esp32Res.terhubung;
+    
     updateESP32Status({
       connected: esp32Res.terhubung,
       lastActivity: esp32Res.aktivitasTerakhir,
@@ -1793,7 +1827,7 @@ async function loadInitialData() {
       ip: esp32Res.ip,
       modulesDetected: esp32Res.modulTerdeteksi,
       activeTeams: esp32Res.timAktif,
-      wifiRSSI: esp32Res.sinyalWiFi ? parseInt(esp32Res.sinyalWiFi) : null,
+      wifiRSSI: validRSSI ? parseInt(esp32Res.sinyalWiFi) : null,
       rssiHistory: esp32Res.rssiHistory || []
     });
     
@@ -1879,8 +1913,8 @@ document.addEventListener('DOMContentLoaded', function() {
   
   const versionInfo = document.createElement('div');
   versionInfo.className = 'version-info';
-  versionInfo.textContent = 'v2.2.1';
-  versionInfo.title = 'Sistem dengan atomic lock, state recovery, WebSocket integration, dan edit skor manual';
+  versionInfo.textContent = 'v2.2.2'; // Versi diperbarui
+  versionInfo.title = 'Sistem dengan perbaikan status WiFi ESP32, atomic lock, state recovery, dan edit skor manual';
   
   const header = document.querySelector('.admin-header');
   if (header) {

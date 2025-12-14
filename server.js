@@ -1,4 +1,4 @@
-﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -243,7 +243,7 @@ let esp32Status = {
   heartbeatCount: 0,
   modulesDetected: 0,
   activeTeams: 0,
-  wifiRSSI: 0
+  wifiRSSI: null  // PERBAIKAN: Diubah dari 0 menjadi null
 };
 
 // ===== SISTEM LOG OPTIMIZED =====
@@ -497,12 +497,15 @@ wss.on('connection', function connection(ws, req) {
   ws.on('close', function close() {
     logger.websocket(`ESP32 disconnected: ${socketId}`);
     
-    // Reset ESP32 status
+    // PERBAIKAN: Reset ESP32 status termasuk wifiRSSI
     esp32WebSocket = null;
     esp32WebSocketId = null;
     
     esp32Status.connected = false;
     esp32Status.connectionType = "websocket_disconnected";
+    esp32Status.wifiRSSI = null;  // PERBAIKAN: Reset wifiRSSI ke null
+    esp32Status.modulesDetected = 0;
+    esp32Status.activeTeams = 0;
     
     // PERBAIKAN: Kirim update ke semua client
     io.emit("esp32Status", esp32Status);
@@ -899,6 +902,7 @@ function monitorESP32WebSocket() {
       
       esp32Status.connected = false;
       esp32Status.connectionType = "websocket_timeout";
+      esp32Status.wifiRSSI = null;  // PERBAIKAN: Reset wifiRSSI
       
       // PERBAIKAN: Update semua client
       io.emit("esp32Status", esp32Status);
@@ -1115,6 +1119,7 @@ function checkESP32Status() {
       
       esp32Status.connected = false;
       esp32Status.connectionType = "timeout";
+      esp32Status.wifiRSSI = null;  // PERBAIKAN: Reset wifiRSSI saat timeout
       
       // PERBAIKAN: Update semua client
       io.emit("esp32Status", esp32Status);
@@ -1259,7 +1264,7 @@ function resetTimer() {
   });
 }
 
-// ===== FUNGSI BUKA KUNCI PAKSA =====
+// ===== FUNGSI BUKA KUNSI PAKSA =====
 function forceUnlockSystem() {
   logger.info("BUKA KUNCI PAKSA: Buka kunci manual atau darurat");
   
@@ -2503,6 +2508,7 @@ io.on("connection", (socket) => {
     if (wasESP32) {
       esp32Status.connected = false;
       esp32Status.connectionType = "socket_terputus";
+      esp32Status.wifiRSSI = null;  // PERBAIKAN: Reset wifiRSSI saat disconnect
       io.emit("esp32Status", esp32Status);
     }
     
