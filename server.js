@@ -1,4 +1,12 @@
-﻿﻿﻿﻿﻿﻿﻿/* Copyright © 2025 Ridwan and Team */
+﻿﻿/* Copyright © 2025 Ridwan and Team */
+/*
+  server.js - Bug Fix Edition
+  PERBAIKAN:
+  - [FIX] Deteksi ESP32 via Socket.IO tidak lagi menggunakan IP lokal sebagai kriteria.
+    Sebelumnya browser admin dari laptop di jaringan lokal bisa memicu esp32Status.connected = true
+    padahal tidak ada ESP32 yang benar-benar terhubung.
+    Sekarang hanya menggunakan clientType === 'esp32' atau User-Agent string.
+*/
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -2373,10 +2381,11 @@ io.on("connection", (socket) => {
   const clientIP = socket.handshake.address;
   const userAgent = socket.handshake.headers['user-agent'] || 'unknown';
   
-  const isESP32 = clientType === 'esp32' || 
-                  clientIP.includes('192.168.1.') || 
-                  clientIP.includes('172.') || 
-                  clientIP.includes('10.') ||
+  // [FIX] Deteksi ESP32 hanya berdasarkan clientType yang dikirim saat koneksi,
+  // BUKAN berdasarkan IP lokal. Sebelumnya browser admin dari laptop di jaringan lokal
+  // (192.168.x.x, 10.x.x.x) bisa salah terdeteksi sebagai ESP32 sehingga
+  // esp32Status.connected = true padahal tidak ada ESP32 yang terhubung.
+  const isESP32 = clientType === 'esp32' ||
                   userAgent.toLowerCase().includes('esp32') ||
                   userAgent.toLowerCase().includes('arduino');
 
@@ -2528,10 +2537,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", (reason) => {
-    const wasESP32 = clientType === 'esp32' || 
-                     clientIP.includes('192.168.1.') || 
-                     clientIP.includes('172.') || 
-                     clientIP.includes('10.');
+    // [FIX] Sama seperti saat koneksi, gunakan clientType/userAgent bukan IP
+    const wasESP32 = clientType === 'esp32' ||
+                     userAgent.toLowerCase().includes('esp32') ||
+                     userAgent.toLowerCase().includes('arduino');
                      
     if (wasESP32) {
       esp32Status.connected = false;

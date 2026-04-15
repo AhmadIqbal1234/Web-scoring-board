@@ -1,7 +1,11 @@
 /*
   ESP32 Quiz Buzzer System - WebSocket Version
-  VERSION 4.2 - Real-time Monitoring Edition
-  Features: Plug & Play module detection, WiFi monitoring, Real-time status updates
+  VERSION 4.3 - Bug Fix Edition
+  
+  PERBAIKAN v4.3:
+  1. [FIX] MSG_FORCE_UNLOCK (0x85) sekarang ditangani - memanggil resetLockState()
+  2. [FIX] globalButtonLock di-reset segera saat MSG_LOCK_DENIED diterima dari server
+  3. [FIX] Lock timeout di-sinkronkan dengan timerDuration dari server (bukan hardcode 90 detik)
 */
 
 #include <WiFi.h>
@@ -141,8 +145,8 @@ void setup() {
   delay(1000);
   
   Serial.println("\n========================================");
-  Serial.println("ESP32 QUIZ BUZZER - Real-time Monitoring v4.2");
-  Serial.println("Features: Plug & Play modules, WiFi monitoring");
+  Serial.println("ESP32 QUIZ BUZZER - Real-time Monitoring v4.3");
+  Serial.println("Bug Fix: Force Unlock, GlobalLock Reset, Timer Sync");
   Serial.println("========================================");
   
   // Initialize pins
@@ -619,6 +623,10 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
         lockActive = true;
         activeTeam = team;
         buttonStates[team-1].lockConfirmed = true;
+
+        // [FIX #2] globalButtonLock di-release setelah server konfirmasi lock
+        // Tidak perlu tunggu 5 detik lagi karena server sudah memutuskan
+        globalButtonLock = false;
         
         setTeamLED(team, true);
         
@@ -630,6 +638,9 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
           config.timerDuration = timerDuration;
           Serial.printf("[CONFIG] Timer updated to %d seconds\n", timerDuration);
         }
+        
+        // Update waktu start lock agar timeout sesuai timerDuration server
+        globalLockStartTime = millis();
       }
       break;
       
@@ -645,6 +656,11 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
         
         setTeamLED(team, false);
         buttonStates[team-1].ledFeedbackActive = false;
+
+        // [FIX #2] Langsung bebaskan globalButtonLock saat ditolak server
+        // Sebelumnya menunggu 5 detik penuh, sekarang tim lain bisa langsung menekan
+        globalButtonLock = false;
+        Serial.println("[BUTTON] globalButtonLock released after LOCK_DENIED");
         
         for (int i = 0; i < 3; i++) {
           digitalWrite(LED_MERAH, HIGH);
@@ -667,6 +683,27 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
       digitalWrite(LED_MERAH, HIGH);
       delay(100);
       digitalWrite(LED_MERAH, LOW);
+      break;
+
+    // [FIX #1] MSG_FORCE_UNLOCK sebelumnya tidak ditangani sama sekali!
+    // Sekarang ditangani: reset semua state dan bersihkan LED
+    case MSG_FORCE_UNLOCK:
+      Serial.println("[WS] ⚡ Force unlock received from server!");
+      resetLockState();
+      
+      // Sinyal LED khusus untuk force unlock (kedip cepat 5x)
+      for (int i = 0; i < 5; i++) {
+        digitalWrite(LED_MERAH, HIGH);
+        digitalWrite(LED_HIJAU, LOW);
+        delay(60);
+        digitalWrite(LED_MERAH, LOW);
+        digitalWrite(LED_HIJAU, HIGH);
+        delay(60);
+      }
+      digitalWrite(LED_MERAH, LOW);
+      digitalWrite(LED_HIJAU, wsConnected ? HIGH : LOW);
+      
+      Serial.println("[WS] ⚡ Force unlock applied, all LEDs cleared");
       break;
       
     case MSG_CONFIG_UPDATE:
@@ -694,6 +731,10 @@ void handleWebSocketBinary(uint8_t *payload, size_t length) {
                      TEAM_MAPPINGS[team-1].teamName, score);
       }
       break;
+
+    default:
+      Serial.printf("[WS] Unknown message type: 0x%02X\n", msgType);
+      break;
   }
 }
 
@@ -708,11 +749,15 @@ void processButtonPress(int team) {
     return;
   }
   
+  // [FIX #2] globalButtonLock hanya berlaku jika belum ada respons server
+  // Setelah MSG_LOCK_ACQUIRED atau MSG_LOCK_DENIED, globalButtonLock sudah di-reset
   if (globalButtonLock) {
-    if (millis() - globalLockStartTime > 5000) {
+    // Timeout fallback tetap ada untuk jaga-jaga jika koneksi lambat/terputus
+    if (millis() - globalLockStartTime > 3000) {
+      Serial.println("[BUTTON] globalButtonLock timeout fallback (3s), releasing");
       globalButtonLock = false;
     } else {
-      Serial.println("[BUTTON] Global lock active");
+      Serial.println("[BUTTON] Global lock active, waiting for server response");
       return;
     }
   }
@@ -735,7 +780,7 @@ void processButtonPress(int team) {
   
   sendButtonPressWS(team);
   
-  Serial.printf("[BUTTON] Team %s pressed, sending via WS\n", TEAM_MAPPINGS[idx].teamName);
+  Serial.printf("[BUTTON] Team %s pressed, waiting for server response...\n", TEAM_MAPPINGS[idx].teamName);
 }
 
 // ========== JURY BUTTONS ==========
@@ -836,7 +881,7 @@ void handleJuryButtons() {
 void resetLockState() {
   lockActive = false;
   activeTeam = 0;
-  globalButtonLock = false;
+  globalButtonLock = false;  // [FIX #2] Selalu reset globalButtonLock di sini
   
   for (int i = 0; i < 12; i++) {
     buttonStates[i].lockConfirmed = false;
@@ -863,7 +908,10 @@ void loop() {
   
   // ========== STATUS LEDS ==========
   if (wsConnected) {
-    digitalWrite(LED_HIJAU, HIGH);
+    // Jangan override LED saat lockActive agar LED tim tetap menyala
+    if (!lockActive) {
+      digitalWrite(LED_HIJAU, HIGH);
+    }
   } else {
     digitalWrite(LED_HIJAU, LOW);
     if (millis() % 1000 < 500) {
@@ -907,9 +955,13 @@ void loop() {
   // ========== HANDLE JURY BUTTONS ==========
   handleJuryButtons();
   
-  // ========== CHECK FOR LOCK TIMEOUT ==========
-  if (lockActive && millis() - globalLockStartTime > 90000) {
-    Serial.println("[TIMEOUT] Lock timeout after 90 seconds");
+  // [FIX #3] Timeout lock disesuaikan dengan timerDuration dari server + buffer 10 detik
+  // Sebelumnya hardcode 90 detik padahal timer server hanya 30 detik default
+  // Ini mencegah ESP32 tetap mengunci padahal server sudah melepas lock
+  unsigned long lockTimeoutMs = (unsigned long)(config.timerDuration + 10) * 1000;
+  if (lockActive && (millis() - globalLockStartTime > lockTimeoutMs)) {
+    Serial.printf("[TIMEOUT] Lock timeout after %d seconds (timerDuration + 10s buffer)\n", 
+                 config.timerDuration + 10);
     resetLockState();
   }
   
