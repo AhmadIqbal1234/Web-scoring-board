@@ -1219,7 +1219,11 @@ footer h5 {
   margin-top: 20px;
 }
 
-.btn-cancel, .btn-save {
+/* [FIX #20] Scope ke .edit-score-dialog agar tidak bentrok dengan .btn-save
+   utama di baris 222 (yang dipakai button "SIMPAN KONFIGURASI").
+   Sebelumnya .btn-save di sini menimpa styling button utama karena muncul belakangan
+   di CSS cascade. */
+.edit-score-dialog .btn-cancel, .edit-score-dialog .btn-save {
   padding: 10px 20px;
   border: none;
   border-radius: 5px;
@@ -1228,21 +1232,21 @@ footer h5 {
   transition: all 0.3s;
 }
 
-.btn-cancel {
+.edit-score-dialog .btn-cancel {
   background: #f5f5f5;
   color: #666;
 }
 
-.btn-cancel:hover {
+.edit-score-dialog .btn-cancel:hover {
   background: #e0e0e0;
 }
 
-.btn-save {
+.edit-score-dialog .btn-save {
   background: #4caf50;
   color: white;
 }
 
-.btn-save:hover {
+.edit-score-dialog .btn-save:hover {
   background: #45a049;
 }
 

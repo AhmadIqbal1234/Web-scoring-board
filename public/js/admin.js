@@ -89,13 +89,25 @@ function toggleEditMode() {
       
       for (let i = 1; i <= TEAM_COUNT; i++) {
         const scoreEl = document.getElementById(`score-${i}`);
-        if (scoreEl) {
+        if (!scoreEl) continue;
+        
+        // [FIX #19] Hanya aktifkan edit untuk tim yang statusnya ENABLED.
+        // Tim nonaktif tidak bisa menjawab, jadi tidak masuk akal skornya diedit.
+        if (teamStatus[i - 1]) {
           scoreEl.style.cursor = "pointer";
           scoreEl.style.backgroundColor = "#f0f8ff";
           scoreEl.style.border = "2px dashed #4caf50";
           scoreEl.style.padding = "5px";
           scoreEl.style.borderRadius = "4px";
           scoreEl.onclick = () => openEditScoreDialog(i);
+        } else {
+          // Tim nonaktif — tampilkan visual bahwa tidak bisa diedit
+          scoreEl.style.cursor = "not-allowed";
+          scoreEl.style.opacity = "0.5";
+          scoreEl.style.border = "2px dashed #999";
+          scoreEl.style.padding = "5px";
+          scoreEl.style.borderRadius = "4px";
+          scoreEl.onclick = null;
         }
       }
       
@@ -117,6 +129,7 @@ function toggleEditMode() {
           scoreEl.style.border = "";
           scoreEl.style.padding = "";
           scoreEl.style.borderRadius = "";
+          scoreEl.style.opacity = "";  // [FIX #19] Reset opacity dari tim nonaktif
           scoreEl.onclick = null;
         }
       }
@@ -129,6 +142,13 @@ function toggleEditMode() {
 
 function openEditScoreDialog(team) {
   if (!editModeActive) return;
+  
+  // [FIX #19] Defense-in-depth: cegah membuka dialog edit untuk tim nonaktif
+  // meskipun entry point sudah di-filter di toggleEditMode.
+  if (!teamStatus[team - 1]) {
+    showNotification(`Tim ${getTeamLetter(team)} dinonaktifkan, tidak bisa edit skor`, "warning");
+    return;
+  }
   
   currentlyEditingTeam = team;
   const currentScore = document.getElementById(`score-${team}`).textContent;
@@ -869,6 +889,31 @@ document.getElementById("setConfig").addEventListener("click", () => {
     return;
   }
   
+  // [FIX #18] Validasi client-side agar tidak trigger bug #3 di server.
+  // Sebelumnya HTML max="0" mengizinkan nilai 0, yang kemudian memicu
+  // logger.warning di server (yang tidak ada) → server crash.
+  if (plus < 1 || plus > 255) {
+    showNotification("Poin benar harus antara 1 sampai 255!", "error");
+    return;
+  }
+  
+  if (minus >= 0) {
+    showNotification("Poin salah harus negatif (minimal -1)!", "error");
+    document.getElementById("minus").focus();
+    return;
+  }
+  
+  if (minus < -127) {
+    showNotification("Poin salah tidak boleh kurang dari -127!", "error");
+    document.getElementById("minus").focus();
+    return;
+  }
+  
+  if (timerDuration < 5 || timerDuration > 300) {
+    showNotification("Durasi timer harus antara 5-300 detik!", "error");
+    return;
+  }
+  
   fetch(`/setconfig?plus=${plus}&minus=${minus}&timerDuration=${timerDuration}`)
     .then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1095,7 +1140,10 @@ socket.on("connect", () => {
 });
 
 socket.on("disconnect", () => {
-  adminLogger.warn('Admin disconnected from WebSocket');
+  // [FIX #17] adminLogger tidak punya method .warn, hanya .warning.
+  // Sebelumnya TypeError di sini menyebabkan handler disconnect tidak pernah selesai
+  // sehingga status dot di pojok kanan atas tidak pernah berubah ke merah.
+  adminLogger.warning('Admin disconnected from WebSocket');
   const statusDot = document.querySelector('.status-dot');
   if (statusDot) {
     statusDot.style.background = '#f44336';

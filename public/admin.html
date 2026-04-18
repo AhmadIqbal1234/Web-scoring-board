@@ -1,4 +1,4 @@
-﻿﻿﻿﻿<!doctype html>
+﻿﻿<!doctype html>
 <html lang="id" class="admin-page">
 <head>
   <meta charset="utf-8" />
@@ -33,12 +33,14 @@
       <div class="config-section">
         <div class="config-item">
           <label class="config-label">Poin Jawaban Benar</label>
-          <input id="plus" type="number" value="5" min="1" max="100" class="config-input" />
+          <!-- [FIX #18] max="255" agar sesuai range uint8_t yang dikirim ke ESP32 -->
+          <input id="plus" type="number" value="5" min="1" max="255" class="config-input" />
         </div>
         
         <div class="config-item">
           <label class="config-label">Poin Jawaban Salah</label>
-          <input id="minus" type="number" value="-2" min="-100" max="0" class="config-input" />
+          <!-- [FIX #18] max="-1" agar tidak bisa input 0 yang memicu logger.warning (bug #3) di server -->
+          <input id="minus" type="number" value="-2" min="-127" max="-1" class="config-input" />
         </div>
         
         <div class="config-item">

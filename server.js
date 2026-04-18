@@ -45,8 +45,11 @@ function loadPersistedState() {
       }
       
       if (state.config) {
-        config = state.config;
-        logger.info('Config restored from file');
+        // [FIX #10] Merge dengan default agar field yang hilang dari state.json lama tidak jadi undefined.
+        // Sebelumnya: config = state.config langsung - kalau versi lama tidak punya timerDuration,
+        // ESP32 akan menerima undefined sebagai timer duration.
+        config = { plus: 5, minus: -2, timerDuration: 30, ...state.config };
+        logger.info('Config restored from file', config);
       }
       
       if (state.teamToggleState && Array.isArray(state.teamToggleState)) {
@@ -265,7 +268,13 @@ const logger = {
     const timestamp = new Date().toLocaleTimeString('id-ID');
     console.error(`[${timestamp}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
   },
-  
+
+  // [FIX #3] Tambah method warning untuk mencegah TypeError di /setconfig endpoint
+  warning: (message, data = null) => {
+    const timestamp = new Date().toLocaleTimeString('id-ID');
+    console.warn(`[${timestamp}] WARNING: ${message}`, data ? JSON.stringify(data, null, 2) : '');
+  },
+
   audio: (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString('id-ID');
     console.log(`[${timestamp}] AUDIO: ${message}`, data ? JSON.stringify(data, null, 2) : '');
@@ -441,11 +450,29 @@ function releaseAtomicLock() {
 }
 
 // ===== WEBSOCKET HANDLER UNTUK ESP32 =====
+// ===== WEBSOCKET HANDLER UNTUK ESP32 =====
 wss.on('connection', function connection(ws, req) {
   const clientIP = req.socket.remoteAddress;
   const socketId = `ws_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   logger.websocket(`ESP32 connected: ${socketId} from ${clientIP}`);
+  
+  // [FIX #5] Terminate koneksi ESP32 lama sebelum assign koneksi baru.
+  // Tanpa ini, ESP32 yang restart bisa membuat "ghost connection": koneksi lama
+  // masih tercatat sebagai esp32WebSocket tapi tidak pernah menerima/mengirim pesan,
+  // dan close handler lama akan reset esp32Status.connected = false padahal ada
+  // koneksi baru yang aktif.
+  if (esp32WebSocket && esp32WebSocket !== ws) {
+    logger.websocket(`Closing stale ESP32 connection ${esp32WebSocketId} before accepting new one`);
+    try {
+      // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+      if (esp32WebSocket.readyState === 0 || esp32WebSocket.readyState === 1) {
+        esp32WebSocket.terminate();
+      }
+    } catch (e) {
+      logger.error('Error terminating old ESP32 WebSocket:', e);
+    }
+  }
   
   // Simpan koneksi ESP32
   esp32WebSocket = ws;
@@ -504,6 +531,15 @@ wss.on('connection', function connection(ws, req) {
   
   ws.on('close', function close() {
     logger.websocket(`ESP32 disconnected: ${socketId}`);
+    
+    // [FIX #5] Hanya reset ESP32 status jika socket yang close adalah koneksi AKTIF saat ini.
+    // Jika ada ESP32 baru yang sudah menggantikan koneksi ini (via wss.on('connection')),
+    // close event dari koneksi lama TIDAK boleh reset status ke false, karena ESP32 baru
+    // sebenarnya masih online.
+    if (ws !== esp32WebSocket) {
+      logger.websocket(`Stale ESP32 close event from ${socketId} - active connection preserved (${esp32WebSocketId})`);
+      return;
+    }
     
     // PERBAIKAN: Reset ESP32 status termasuk wifiRSSI
     esp32WebSocket = null;
@@ -2114,15 +2150,24 @@ app.get("/setconfig", (req, res) => {
   let minus = parseInt(req.query.minus);
   const timerDuration = parseInt(req.query.timerDuration);
   
-  // PERBAIKAN: Validasi input dan pastikan minus tetap negatif
+  // [FIX #2] Validasi input dan clamp ke range byte ESP32 (int8_t untuk minus, uint8_t untuk plus)
+  // ESP32 mengirim minus sebagai single byte signed (-128..127) dan plus sebagai single byte unsigned (0..255)
   if (!Number.isNaN(plus) && plus > 0) {
-    config.plus = plus;
-    logger.info(`Config updated: plus points = ${plus}`);
+    const clampedPlus = Math.min(255, plus); // uint8_t range
+    if (clampedPlus !== plus) {
+      logger.warning(`Plus value ${plus} di-clamp ke ${clampedPlus} (range uint8_t: 1-255)`);
+    }
+    config.plus = clampedPlus;
+    logger.info(`Config updated: plus points = ${clampedPlus}`);
   }
-  
+
   if (!Number.isNaN(minus) && minus < 0) {
-    config.minus = minus;
-    logger.info(`Config updated: minus points = ${minus} (negatif)`);
+    const clampedMinus = Math.max(-127, minus); // int8_t range (lower bound)
+    if (clampedMinus !== minus) {
+      logger.warning(`Minus value ${minus} di-clamp ke ${clampedMinus} (range int8_t: -127..-1)`);
+    }
+    config.minus = clampedMinus;
+    logger.info(`Config updated: minus points = ${clampedMinus} (negatif)`);
   } else if (!Number.isNaN(minus)) {
     logger.warning(`Invalid minus value: ${minus}. Must be negative. Keeping previous value: ${config.minus}`);
   }

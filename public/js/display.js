@@ -622,10 +622,13 @@ function loadInitialData() {
       }
     }
     
-    // PERBAIKAN: Update toggle state dengan benar
-    if (Array.isArray(toggleStateData.toggleState)) {
-      teamToggleState = [...toggleStateData.toggleState];
-      lastServerToggleState = [...toggleStateData.toggleState];
+    // [FIX #1] Server endpoint /teamToggleState mengembalikan array langsung (res.json(teamToggleState)),
+    // bukan object { toggleState: [...] }. Sebelumnya toggleStateData.toggleState selalu undefined
+    // sehingga updateTeamDisplay() tidak pernah dipanggil saat initial load — tim nonaktif tetap
+    // tampil di papan skor sampai event teamToggleUpdate berikutnya dari server.
+    if (Array.isArray(toggleStateData)) {
+      teamToggleState = [...toggleStateData];
+      lastServerToggleState = [...toggleStateData];
       updateTeamDisplay(); // PASTIKAN ini dipanggil
       console.log('[INIT] Team toggle state loaded:', teamToggleState);
     }
