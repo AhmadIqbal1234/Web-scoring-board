@@ -16,8 +16,8 @@
 #include <WiFiManager.h>
 
 // ========== KONFIGURASI UNTUK RAILWAY SSL ==========
-const char* DEFAULT_SERVER_WS = "web-scoring-board-production.up.railway.app";
-const int   WS_PORT = 443;
+const char* DEFAULT_SERVER_WS = "192.168.1.8";
+const int   WS_PORT = 8080;
 const char* WS_PATH = "/esp32ws";  // PATH YANG BENAR
 const char* WIFI_AP_NAME = "Quiz_Config_WS";
 
